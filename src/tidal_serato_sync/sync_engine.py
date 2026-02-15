@@ -231,7 +231,6 @@ class SyncEngine:
             import subprocess
             logging.info(f"Iniciando descarga de {len(commands)//2} archivos...")
             try:
-            try:
                 # Disable subfolders globally for this session to ensure flat download in target dir
                 subprocess.run([td_bin, "cfg", "album_folder", "false"], check=False)
                 subprocess.run([td_bin, "cfg", "artist_folder", "false"], check=False)
