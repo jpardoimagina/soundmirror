@@ -231,67 +231,97 @@ class SyncEngine:
             import subprocess
             logging.info(f"Iniciando descarga de {len(commands)//2} archivos...")
             try:
-                # Disable subfolders globally for this session to ensure flat download in target dir
+                import shutil
+                import os
+                
+                # Create a temporary directory for downloads
+                temp_download_dir = Path("./_recovery_temp")
+                if temp_download_dir.exists():
+                    shutil.rmtree(temp_download_dir)
+                temp_download_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Configure tidal-dl-ng to use this temp dir globally for this run
+                # Disable subfolders to verify file easily
+                subprocess.run([td_bin, "cfg", "download_path", str(temp_download_dir.absolute())], check=True)
                 subprocess.run([td_bin, "cfg", "album_folder", "false"], check=False)
                 subprocess.run([td_bin, "cfg", "artist_folder", "false"], check=False)
                 subprocess.run([td_bin, "cfg", "playlist_folder", "false"], check=False)
-                
-                import os
 
                 for i in range(0, len(commands), 2):
+                    # Clear temp dir for next track
+                    for f in temp_download_dir.glob("*"):
+                        if f.is_file():
+                            f.unlink()
+                        elif f.is_dir():
+                            shutil.rmtree(f)
+
                     comment = commands[i] # # Track: /path/to/file
                     cmd = commands[i+1]    # tidal-dl ...
-                    original_path = comment[9:] # Remove "# Track: "
-                    target_dir = Path(original_path).parent
+                    original_path_str = comment[9:] # Remove "# Track: "
+                    original_path_obj = Path(original_path_str)
+                    target_dir = original_path_obj.parent
                     
                     if not target_dir.exists():
                         target_dir.mkdir(parents=True, exist_ok=True)
                         
                     print(f"\n==================================================")
-                    print(f"Recuperando: {Path(original_path).name}")
+                    print(f"Recuperando: {original_path_obj.name}")
                     print(f"Destino: {target_dir}")
                     print(f"==================================================")
                     
                     try:
-                        # Configure download path for this specific track
-                        subprocess.run([td_bin, "cfg", "download_path", str(target_dir)], check=True)
-                        
-                        # Snapshot files before download
-                        files_before = set(os.listdir(target_dir))
-                        
-                        # Execute download
+                        # Execute download (it will go to temp_download_dir)
                         subprocess.run(cmd, shell=True, check=True)
                         
-                        # Snapshot files after download
-                        files_after = set(os.listdir(target_dir))
-                        new_files = files_after - files_before
+                        # Find the downloaded file
+                        downloaded_files = list(temp_download_dir.glob("*"))
+                        # Filter out hidden files or system files if any (e.g. .DS_Store)
+                        downloaded_files = [f for f in downloaded_files if f.is_file() and not f.name.startswith('.')]
                         
-                        if new_files:
+                        if downloaded_files:
                             # Assuming one file downloaded per command
-                            new_filename = new_files.pop()
-                            downloaded_full_path = target_dir / new_filename
+                            downloaded_file = downloaded_files[0]
                             
-                            original_filename = Path(original_path).name
+                            # Construct final target path
+                            # Use original stem (filename without extension) + new extension
+                            final_target_filename = original_path_obj.stem + downloaded_file.suffix
+                            final_target_path = target_dir / final_target_filename
                             
-                            if new_filename != original_filename:
-                                print(f"⚠️  NOMBRE CAMBIADO: {original_filename}")
-                                print(f"   -> ACTUAL: {new_filename}")
-                            else:
-                                print(f"✅ Descargado correctamente con nombre original.")
-                                
-                            self.db.update_track_status(original_path, 'downloaded', str(downloaded_full_path))
+                            # Backup logic
+                            # Check if final target exists (e.g. we are upgrading same extension file)
+                            if final_target_path.exists():
+                                backup_path = target_dir / f"BACKUP-{final_target_path.name}"
+                                print(f"⚠️  El archivo destino ya existe. Renombrando actual a: {backup_path.name}")
+                                final_target_path.rename(backup_path)
+                            
+                            # Check if original path exists (if extension is different, e.g. replacing mp3 with flac)
+                            # We might want to backup the old mp3 too?
+                            # User said: "el antiguo tiens que poner el prefiujo BACKUP-"
+                            if original_path_obj.exists() and original_path_obj != final_target_path:
+                                 backup_path_original = target_dir / f"BACKUP-{original_path_obj.name}"
+                                 print(f"⚠️  El archivo original (calidad previa?) existe. Renombrando a: {backup_path_original.name}")
+                                 original_path_obj.rename(backup_path_original)
+
+                            # Move downloaded file to final destination
+                            shutil.move(str(downloaded_file), str(final_target_path))
+                            
+                            print(f"✅ Descargado y movido a: {final_target_path.name}")
+                            self.db.update_track_status(original_path_str, 'downloaded', str(final_target_path))
                         else:
-                            # No new file found. Potentially skipped because it exists?
-                            print("ℹ️  No se detectó un archivo nuevo (¿posiblemente ya existía o nombre idéntico?)")
-                            # We mark as downloaded anyway if exit code was 0, but without changing path
-                            self.db.update_track_status(original_path, 'downloaded')
+                            print("ℹ️  No se detectó el archivo descargado en la carpeta temporal.")
+                            self.db.update_track_status(original_path_str, 'failed')
                             
                     except subprocess.CalledProcessError as e:
                         logging.error(f"Error al descargar: {e}")
-                        self.db.update_track_status(original_path, 'failed')
+                        self.db.update_track_status(original_path_str, 'failed')
                     except Exception as e:
                         logging.error(f"Error inesperado: {e}")
-                        self.db.update_track_status(original_path, 'failed')
+                        self.db.update_track_status(original_path_str, 'failed')
+
+                # Cleanup temp dir
+                if temp_download_dir.exists():
+                    shutil.rmtree(temp_download_dir)
+
             except KeyboardInterrupt:
                 print("\n\nOperación cancelada por el usuario (Ctrl+C). Saliendo...")
                 return
