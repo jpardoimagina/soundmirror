@@ -231,10 +231,13 @@ class SyncEngine:
             import subprocess
             logging.info(f"Iniciando descarga de {len(commands)//2} archivos...")
             try:
+            try:
                 # Disable subfolders globally for this session to ensure flat download in target dir
                 subprocess.run([td_bin, "cfg", "album_folder", "false"], check=False)
                 subprocess.run([td_bin, "cfg", "artist_folder", "false"], check=False)
                 subprocess.run([td_bin, "cfg", "playlist_folder", "false"], check=False)
+                
+                import os
 
                 for i in range(0, len(commands), 2):
                     comment = commands[i] # # Track: /path/to/file
@@ -242,6 +245,9 @@ class SyncEngine:
                     original_path = comment[9:] # Remove "# Track: "
                     target_dir = Path(original_path).parent
                     
+                    if not target_dir.exists():
+                        target_dir.mkdir(parents=True, exist_ok=True)
+                        
                     print(f"\n==================================================")
                     print(f"Recuperando: {Path(original_path).name}")
                     print(f"Destino: {target_dir}")
@@ -251,12 +257,42 @@ class SyncEngine:
                         # Configure download path for this specific track
                         subprocess.run([td_bin, "cfg", "download_path", str(target_dir)], check=True)
                         
+                        # Snapshot files before download
+                        files_before = set(os.listdir(target_dir))
+                        
                         # Execute download
                         subprocess.run(cmd, shell=True, check=True)
+                        
+                        # Snapshot files after download
+                        files_after = set(os.listdir(target_dir))
+                        new_files = files_after - files_before
+                        
+                        if new_files:
+                            # Assuming one file downloaded per command
+                            new_filename = new_files.pop()
+                            downloaded_full_path = target_dir / new_filename
+                            
+                            original_filename = Path(original_path).name
+                            
+                            if new_filename != original_filename:
+                                print(f"⚠️  NOMBRE CAMBIADO: {original_filename}")
+                                print(f"   -> ACTUAL: {new_filename}")
+                            else:
+                                print(f"✅ Descargado correctamente con nombre original.")
+                                
+                            self.db.update_track_status(original_path, 'downloaded', str(downloaded_full_path))
+                        else:
+                            # No new file found. Potentially skipped because it exists?
+                            print("ℹ️  No se detectó un archivo nuevo (¿posiblemente ya existía o nombre idéntico?)")
+                            # We mark as downloaded anyway if exit code was 0, but without changing path
+                            self.db.update_track_status(original_path, 'downloaded')
+                            
                     except subprocess.CalledProcessError as e:
                         logging.error(f"Error al descargar: {e}")
+                        self.db.update_track_status(original_path, 'failed')
                     except Exception as e:
                         logging.error(f"Error inesperado: {e}")
+                        self.db.update_track_status(original_path, 'failed')
             except KeyboardInterrupt:
                 print("\n\nOperación cancelada por el usuario (Ctrl+C). Saliendo...")
                 return

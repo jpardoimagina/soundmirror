@@ -23,7 +23,8 @@ class DatabaseManager:
                     isrc TEXT,
                     bitrate INTEGER,
                     last_sync TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    status TEXT DEFAULT 'synced'
+                    status TEXT DEFAULT 'synced',
+                    downloaded_path TEXT
                 )
             """)
             # Table for mirrored crates
@@ -60,6 +61,10 @@ class DatabaseManager:
             if 'bitrate' not in cols:
                 cursor.execute("ALTER TABLE track_mapping ADD COLUMN bitrate INTEGER")
             
+            # Migration check: ensure downloaded_path column exists
+            if 'downloaded_path' not in cols:
+                cursor.execute("ALTER TABLE track_mapping ADD COLUMN downloaded_path TEXT")
+            
             # Clean up existing crate_name extensions if any
             cursor.execute("UPDATE mirror_config SET crate_name = REPLACE(crate_name, '.crate', '') WHERE crate_name LIKE '%.crate'")
             conn.commit()
@@ -79,11 +84,14 @@ class DatabaseManager:
             """, (local_path, tidal_id, isrc, bitrate))
             conn.commit()
 
-    def update_track_status(self, local_path: str, status: str):
-        """Updates the status of a track."""
+    def update_track_status(self, local_path: str, status: str, downloaded_path: Optional[str] = None):
+        """Updates the status and optional downloaded path of a track."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE track_mapping SET status = ? WHERE local_path = ?", (status, local_path))
+            if downloaded_path:
+                cursor.execute("UPDATE track_mapping SET status = ?, downloaded_path = ? WHERE local_path = ?", (status, downloaded_path, local_path))
+            else:
+                cursor.execute("UPDATE track_mapping SET status = ? WHERE local_path = ?", (status, local_path))
             conn.commit()
 
     def get_track_info(self, local_path: str) -> Optional[Dict]:
