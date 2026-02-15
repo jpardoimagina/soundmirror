@@ -26,7 +26,8 @@ def main():
     subparsers.add_parser("list", help="Lista los crates registrados en la DB")
 
     # Command: discover
-    subparsers.add_parser("discover", help="Escanea y registra todos los crates de Serato")
+    discover_parser = subparsers.add_parser("discover", help="Escanea y registra todos los crates de Serato")
+    discover_parser.add_argument("--serato-path", help="Ruta base de la carpeta _Serato_")
 
     # Command: add
     add_parser = subparsers.add_parser("add", help="Marca un crate para espejar en Tidal")
@@ -45,15 +46,41 @@ def main():
 
     args = parser.parse_args()
 
-    # Base dir for Serato
-    serato_dir = "/Users/jpardo/Downloads/_Serato_"
+    # Load configuration
+    config_path = Path("mirrors.json")
+    config = {}
+    if config_path.exists():
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+        except Exception as e:
+            print(f"Advertencia: No se pudo leer mirrors.json: {e}")
+
+    # Determine Base dir for Serato
+    # Priority: 1. Args, 2. Config, 3. Default
+    serato_dir = "/Users/jpardo/Downloads/_Serato_" # Default fallback
+    
+    if args.command == "discover" and args.serato_path:
+        serato_dir = args.serato_path
+    elif config.get("settings", {}).get("serato_base_dir"):
+        serato_dir = config.get("settings", {}).get("serato_base_dir")
+    
+    # Ensure Path object and existence check for discover
+    serato_path_obj = Path(serato_dir)
+    
     db = DatabaseManager()
 
     if args.command == "list":
         list_serato_crates(db, serato_dir)
 
     elif args.command == "discover":
-        crates = CrateHandler.list_all_crates(serato_dir)
+        if not serato_path_obj.exists():
+            print(f"Error: La carpeta de Serato no existe en: {serato_dir}")
+            print("Usa --serato-path para especificar la ubicación correcta o edita mirrors.json")
+            return
+
+        print(f"Escaneando crates en: {serato_dir}")
+        crates = CrateHandler.list_all_crates(str(serato_path_obj))
         db.bulk_add_discovered_crates(crates)
         print(f"Se han registrado {len(crates)} crates en la base de datos (todos inactivos por defecto).")
         print("Usa 'list' para verlos y 'add' para activar la sincronización.")
@@ -72,6 +99,11 @@ def main():
                     config = json.load(f)
             else:
                 config = {"mirrors": [], "settings": {"serato_base_dir": serato_dir}}
+                # Ensure settings dict exists if loaded but empty
+                if "settings" not in config:
+                    config["settings"] = {}
+                if "serato_base_dir" not in config["settings"]:
+                    config["settings"]["serato_base_dir"] = serato_dir
             
             # Check if already exists
             exists = False
