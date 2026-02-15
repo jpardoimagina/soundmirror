@@ -1,8 +1,6 @@
 from pathlib import Path
 from typing import List, Dict
-import serato_crate
-
-
+import struct
 import struct
 
 class CrateHandler:
