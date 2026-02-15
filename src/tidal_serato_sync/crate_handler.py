@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import List, Dict
 import struct
-import struct
 
 class CrateHandler:
     """Handles reading and parsing of Serato .crate files manually."""
