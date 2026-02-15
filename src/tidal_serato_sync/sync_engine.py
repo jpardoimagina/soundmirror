@@ -186,7 +186,7 @@ class SyncEngine:
             for local_path, tidal_id in rows:
                 # Use absolute path
                 full_path = Path("/" + local_path) if not local_path.startswith("/") else Path(local_path)
-                commands.append(f"# Track: {full_path.name}")
+                commands.append(f"# Track: {full_path}")
                 # Note: tidal-dl-ng doesn't have a direct -o flag for 'dl'. 
                 # It uses the global 'download_base_path'.
                 commands.append(f"{td_bin} dl \"https://tidal.com/track/{tidal_id}\"")
@@ -222,21 +222,32 @@ class SyncEngine:
             with open(script_path, "w") as f:
                 f.write("#!/bin/bash\n")
                 f.write("\n".join(commands))
-            script_path.chmod(0o755)
+                
+            # Make executable
+            import os
+            os.chmod(script_path, 0o755)
             logging.info(f"Script de respaldo generado en: {script_path}")
         else:
             import subprocess
             logging.info(f"Iniciando descarga de {len(commands)//2} archivos...")
-            for i in range(0, len(commands), 2):
-                comment = commands[i] # # Track: ...
-                cmd = commands[i+1]    # tidal-dl ...
-                print(f"Ejecutando: {comment[2:]}") # Print track name
-                try:
-                    subprocess.run(cmd, shell=True, check=True)
-                except subprocess.CalledProcessError as e:
-                    logging.error(f"Error al descargar: {e}")
-                except Exception as e:
-                    logging.error(f"Error inesperado: {e}")
+            try:
+                for i in range(0, len(commands), 2):
+                    comment = commands[i] # # Track: /path/to/file
+                    cmd = commands[i+1]    # tidal-dl ...
+                    original_path = comment[9:] # Remove "# Track: "
+                    print(f"\n==================================================")
+                    print(f"Recuperando: {Path(original_path).name}")
+                    print(f"Ubicación original: {original_path}")
+                    print(f"==================================================")
+                    try:
+                        subprocess.run(cmd, shell=True, check=True)
+                    except subprocess.CalledProcessError as e:
+                        logging.error(f"Error al descargar: {e}")
+                    except Exception as e:
+                        logging.error(f"Error inesperado: {e}")
+            except KeyboardInterrupt:
+                print("\n\nOperación cancelada por el usuario (Ctrl+C). Saliendo...")
+                return
 
 if __name__ == "__main__":
     engine = SyncEngine()
