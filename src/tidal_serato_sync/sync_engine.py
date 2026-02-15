@@ -231,15 +231,27 @@ class SyncEngine:
             import subprocess
             logging.info(f"Iniciando descarga de {len(commands)//2} archivos...")
             try:
+                # Disable subfolders globally for this session to ensure flat download in target dir
+                subprocess.run([td_bin, "cfg", "album_folder", "false"], check=False)
+                subprocess.run([td_bin, "cfg", "artist_folder", "false"], check=False)
+                subprocess.run([td_bin, "cfg", "playlist_folder", "false"], check=False)
+
                 for i in range(0, len(commands), 2):
                     comment = commands[i] # # Track: /path/to/file
                     cmd = commands[i+1]    # tidal-dl ...
                     original_path = comment[9:] # Remove "# Track: "
+                    target_dir = Path(original_path).parent
+                    
                     print(f"\n==================================================")
                     print(f"Recuperando: {Path(original_path).name}")
-                    print(f"Ubicación original: {original_path}")
+                    print(f"Destino: {target_dir}")
                     print(f"==================================================")
+                    
                     try:
+                        # Configure download path for this specific track
+                        subprocess.run([td_bin, "cfg", "download_path", str(target_dir)], check=True)
+                        
+                        # Execute download
                         subprocess.run(cmd, shell=True, check=True)
                     except subprocess.CalledProcessError as e:
                         logging.error(f"Error al descargar: {e}")
