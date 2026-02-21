@@ -57,13 +57,22 @@ class MetadataCloner:
             elif isinstance(audio, MP4):
                 if audio.tags:
                     for key, values in audio.tags.items():
-                        if key.startswith("----:com.apple.iTunes:Serato"):
-                            desc = key.split(":")[-1] # e.g. "Serato Markers2"
-                            tags_extracted[desc] = bytes(values[0])
+                        if key.startswith("----:com.serato.dj:"):
+                            # MP4 stores them as e.g. "markers", "markersv2", "beatgrid"
+                            # we map them to the standard GEOB desc used across MP3/FLAC
+                            desc = key.split(":")[-1]
+                            if desc == "markers": desc_mapped = "Serato Markers_"
+                            elif desc == "markersv2": desc_mapped = "Serato Markers2"
+                            elif desc == "beatgrid": desc_mapped = "Serato BeatGrid"
+                            elif desc == "autgain": desc_mapped = "Serato Autotags"
+                            elif desc == "overview": desc_mapped = "Serato Overview"
+                            elif desc == "analysisVersion": desc_mapped = "Serato Analysis"
+                            else: desc_mapped = "Serato " + desc.title()
+                            tags_extracted[desc_mapped] = bytes(values[0])
                         elif key == '\xa9grp': tags_extracted['GROUPING'] = values[0].encode('utf-8')
                         elif key == '\xa9cmt': tags_extracted['COMMENT'] = values[0].encode('utf-8')
                         elif key == '\xa9gen': tags_extracted['GENRE'] = values[0].encode('utf-8')
-                        elif key == '\xa9pub' or key.lower() == '----:com.apple.itunes:publisher':
+                        elif key == '\xa9pub' or key.lower() == '----:com.apple.itunes:publisher' or key == '----:com.apple.iTunes:LABEL':
                             tags_extracted['LABEL'] = values[0] if isinstance(values[0], bytes) else str(values[0]).encode('utf-8')
                         elif key == 'rate' or key.lower() == '----:com.apple.itunes:rating':
                             tags_extracted['RATING'] = str(values[0]).encode('utf-8')
