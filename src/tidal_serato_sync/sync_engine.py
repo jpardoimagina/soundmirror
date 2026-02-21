@@ -271,22 +271,27 @@ class SyncEngine:
                     print(f"==================================================")
                     
                     try:
-                        # Snapshot files in the Tracks dir before download
-                        files_before = set(f.name for f in tracks_download_dir.iterdir() if f.is_file())
+                        # Snapshot files in the download base dir before download (recursively to catch Videos/Tracks/Albums)
+                        # We limit the search to media files to be faster and ignore hidden files
+                        allowed_exts = {'.flac', '.mp3', '.mp4', '.m4a', '.wav'}
+                        files_before = set(
+                            str(f.relative_to(download_base_dir)) for f in download_base_dir.rglob("*") 
+                            if f.is_file() and f.suffix.lower() in allowed_exts and not f.name.startswith('.')
+                        )
                         
                         # Execute download
                         subprocess.run(cmd, shell=True, check=True)
                         
-                        # Snapshot files in the Tracks dir after download to find new file
-                        files_after = set(f.name for f in tracks_download_dir.iterdir() if f.is_file())
+                        # Snapshot files after download
+                        files_after = set(
+                            str(f.relative_to(download_base_dir)) for f in download_base_dir.rglob("*") 
+                            if f.is_file() and f.suffix.lower() in allowed_exts and not f.name.startswith('.')
+                        )
                         new_files = list(files_after - files_before)
-                        
-                        # Filter out OS files
-                        new_files = [f for f in new_files if not f.startswith('.')]
                         
                         if new_files:
                             # Assuming one file downloaded per command
-                            downloaded_file = tracks_download_dir / new_files[0]
+                            downloaded_file = download_base_dir / new_files[0]
                             
                             # Construct final target path
                             final_target_filename = original_path_obj.stem + downloaded_file.suffix
