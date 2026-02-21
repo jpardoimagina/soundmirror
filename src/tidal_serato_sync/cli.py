@@ -38,6 +38,7 @@ def main():
     # Command: sync
     sync_parser = subparsers.add_parser("sync", help="Ejecuta la sincronización")
     sync_parser.add_argument("--max-bitrate", type=int, help="Solo sincroniza canciones locales con bitrate menor o igual a este valor (kbps)")
+    sync_parser.add_argument("--force-update", action="store_true", help="Fuerza pending_download en canciones existentes que cumplan el filtro de bitrate")
 
     # Command: recover
     recover_parser = subparsers.add_parser("recover", help="Ejecuta la descarga de archivos faltantes")
@@ -143,7 +144,8 @@ def main():
 
     elif args.command == "sync":
         engine = SyncEngine()
-        engine.run_sync(max_bitrate=args.max_bitrate)
+        force_update = getattr(args, 'force_update', False)
+        engine.run_sync(max_bitrate=args.max_bitrate, force_update=force_update)
 
     elif args.command == "recover":
         engine = SyncEngine()

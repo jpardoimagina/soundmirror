@@ -22,7 +22,7 @@ class SyncEngine:
         with open(self.config_path, 'r') as f:
             return json.load(f)
 
-    def run_sync(self, max_bitrate: Optional[int] = None):
+    def run_sync(self, max_bitrate: Optional[int] = None, force_update: bool = False):
         """Executes the synchronization for all active mirrors in the database."""
         if not self.tidal.authenticate():
             logging.error("Failed to authenticate with Tidal.")
@@ -135,7 +135,11 @@ class SyncEngine:
                     except Exception as e:
                         logging.error(f"Could not create directory {full_path.parent}: {e}")
                 else:
-                    self.db.update_track_status(db_path, 'synced')
+                    if force_update:
+                        logging.warning(f"Forcing update for existing file: {full_path}. Marking as pending_download.")
+                        self.db.update_track_status(db_path, 'pending_download')
+                    else:
+                        self.db.update_track_status(db_path, 'synced')
 
         # Update playlist with all found tracks
         if found_on_tidal:
@@ -351,26 +355,26 @@ class SyncEngine:
                             
                             if is_upgrade:
                                 # Old file goes to pending_cleanup, keep track of backup location
-                                self.db.update_track_status(original_path_str, 'pending_cleanup', str(backup_path_original))
+                                self.db.update_track_status(original_path_str.lstrip('/'), 'pending_cleanup', str(backup_path_original))
                                 # Register new file as synced
                                 self.db.upsert_track(str(final_target_path).lstrip('/'), tidal_id)
-                                self.db.update_track_status(str(final_target_path), 'synced', str(final_target_path))
+                                self.db.update_track_status(str(final_target_path).lstrip('/'), 'synced', str(final_target_path))
                             else:
-                                self.db.update_track_status(original_path_str, 'synced', str(final_target_path))
+                                self.db.update_track_status(original_path_str.lstrip('/'), 'synced', str(final_target_path))
                                 
                             print(f"🎉 Descarga completada -> {final_target_path.name}")
                             
                         else:
                             print("ℹ️  No se detectó ningún archivo NUEVO en la ruta temporal.")
                             print("    (Si el FLAC ya existía allí de antes debido a un error previo, bórralo manualmente para que soundmirror pueda interceptar la nueva descarga completa).")
-                            self.db.update_track_status(original_path_str, 'failed')
+                            self.db.update_track_status(original_path_str.lstrip('/'), 'failed')
                             
                     except subprocess.CalledProcessError as e:
                         logging.error(f"Error al descargar: {e}")
-                        self.db.update_track_status(original_path_str, 'failed')
+                        self.db.update_track_status(original_path_str.lstrip('/'), 'failed')
                     except Exception as e:
                         logging.error(f"Error inesperado procesando {original_path_obj.name}: {e}")
-                        self.db.update_track_status(original_path_str, 'failed')
+                        self.db.update_track_status(original_path_str.lstrip('/'), 'failed')
 
             except KeyboardInterrupt:
                 print("\n\nOperación cancelada por el usuario (Ctrl+C). Saliendo...")
