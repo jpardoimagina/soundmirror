@@ -4,15 +4,16 @@ from typing import Dict, Optional
 import logging
 from mutagen import File
 from mutagen.flac import FLAC
+from mutagen.mp4 import MP4
 
 logger = logging.getLogger(__name__)
 
 class MetadataCloner:
-    """Clones Serato-specific metadata (Cues, Beatgrids, etc.) between audio files."""
+    """Clones Serato-specific metadata and DJ-critical tags between audio files."""
     
     @staticmethod
     def extract_serato_markers(source_path: str) -> Dict[str, bytes]:
-        """Extracts Serato metadata from an audio file."""
+        """Extracts Serato metadata and standard DJ tags from an audio file."""
         tags_extracted = {}
         try:
             audio = File(source_path)
@@ -20,27 +21,49 @@ class MetadataCloner:
                 logger.warning(f"Unsupported audio format for metadata extraction: {source_path}")
                 return tags_extracted
 
-            # If MP3 (has ID3 tags)
-            if hasattr(audio, 'tags') and audio.tags:
+            # -- 1. If MP3 (has ID3 tags)
+            if hasattr(audio, 'tags') and audio.tags and not isinstance(audio, (FLAC, MP4)):
                 for key, frame in audio.tags.items():
+                    # Serato GEOB
                     if key.startswith("GEOB") and hasattr(frame, 'desc') and frame.desc.startswith("Serato"):
                         tags_extracted[frame.desc] = frame.data
                         
-                # Also extract Key and BPM if present
-                for key in ['TKEY', 'TBPM', 'TCOM']:
-                    if key in audio.tags:
-                        tags_extracted[key] = audio.tags[key].text[0].encode('utf-8')
-                        
-            # If FLAC (has Vorbis comments)
+                    # Standard tags
+                    elif key == 'TKEY': tags_extracted['KEY'] = frame.text[0].encode('utf-8')
+                    elif key == 'TBPM': tags_extracted['BPM'] = frame.text[0].encode('utf-8')
+                    elif key == 'TCOM': tags_extracted['COMPOSER'] = frame.text[0].encode('utf-8')
+                    elif key == 'TIT1': tags_extracted['GROUPING'] = frame.text[0].encode('utf-8')
+                    elif key.startswith('COMM'):
+                        if frame.text: tags_extracted['COMMENT'] = frame.text[0].encode('utf-8')
+
+            # -- 2. If FLAC (has Vorbis comments)
             elif isinstance(audio, FLAC):
-                for key, values in audio.tags.items():
-                    if key.lower().startswith("serato"):
-                        # In FLAC, Serato tags are base64 encoded strings
-                        try:
-                            tags_extracted[key] = base64.b64decode(values[0])
-                        except Exception as e:
-                            logger.error(f"Error decoding base64 Serato tag {key} in FLAC: {e}")
-                            
+                if audio.tags:
+                    for key, values in audio.tags.items():
+                        key_lower = key.lower()
+                        if key_lower.startswith("serato"):
+                            try:
+                                tags_extracted[key] = base64.b64decode(values[0])
+                            except Exception as e:
+                                logger.error(f"Error decoding base64 Serato tag {key} in FLAC: {e}")
+                        elif key_lower in ['key', 'bpm', 'composer', 'grouping', 'comment', 'genre']:
+                            tags_extracted[key_lower.upper()] = values[0].encode('utf-8')
+
+            # -- 3. If MP4/M4A (has Atom tags)
+            elif isinstance(audio, MP4):
+                if audio.tags:
+                    for key, values in audio.tags.items():
+                        if key.startswith("----:com.apple.iTunes:Serato"):
+                            desc = key.split(":")[-1] # e.g. "Serato Markers2"
+                            tags_extracted[desc] = bytes(values[0])
+                        elif key == '\xa9grp': tags_extracted['GROUPING'] = values[0].encode('utf-8')
+                        elif key == '\xa9cmt': tags_extracted['COMMENT'] = values[0].encode('utf-8')
+                        elif key == '\xa9gen': tags_extracted['GENRE'] = values[0].encode('utf-8')
+                        elif key == '----:com.apple.iTunes:KEY' or key == '----:com.apple.iTunes:initialkey':
+                            tags_extracted['KEY'] = bytes(values[0])
+                        elif key == 'tmpo':
+                            tags_extracted['BPM'] = str(values[0]).encode('utf-8')
+
         except Exception as e:
             logger.error(f"Error extracting metadata from {source_path}: {e}")
             
@@ -59,41 +82,49 @@ class MetadataCloner:
                 return False
 
             if isinstance(audio, FLAC):
-                # Write to Vorbis comments as base64 strings
                 for desc, data in markers.items():
-                    if desc in ['TKEY', 'TBPM', 'TCOM']:
-                        # Map to standard Vorbis comments
-                        # FLAC keys: KEY, BPM, COMPOSER
-                        flac_key = 'KEY' if desc == 'TKEY' else ('BPM' if desc == 'TBPM' else 'COMPOSER')
-                        audio.tags[flac_key] = data.decode('utf-8', errors='ignore')
-                    else:
-                        # FLAC keys for Serato: e.g. "Serato Markers_" -> "serato_markers_"
-                        safe_key = desc.replace(' ', '_').lower()
+                    if desc in ['KEY', 'BPM', 'COMPOSER', 'GROUPING', 'COMMENT', 'GENRE']:
+                        audio.tags[desc] = data.decode('utf-8', errors='ignore')
+                    elif desc in ['TKEY', 'TBPM', 'TCOM', 'TIT1', 'COMM', 'TCON']: 
+                        mapping = {'TKEY':'KEY', 'TBPM':'BPM', 'TCOM':'COMPOSER', 'TIT1':'GROUPING', 'COMM':'COMMENT', 'TCON':'GENRE'}
+                        audio.tags[mapping[desc]] = data.decode('utf-8', errors='ignore')
+                    elif "serato" in desc.lower():
+                        if desc.lower().startswith("serato_"):
+                            safe_key = desc.lower()
+                        else:
+                            safe_key = desc.replace(' ', '_').lower()
                         b64_data = base64.b64encode(data).decode('ascii')
                         audio.tags[safe_key] = b64_data
                         
                 audio.save()
                 return True
                 
-            elif hasattr(audio, 'tags') and audio.tags is not None:
-                from mutagen.id3 import GEOB, TKEY, TBPM, TCOM
+            elif hasattr(audio, 'tags') and audio.tags is not None and not isinstance(audio, MP4):
+                # ID3 injection
+                from mutagen.id3 import GEOB, TKEY, TBPM, TCOM, TIT1, COMM, TCON
                 try:
                     audio.add_tags()
                 except Exception:
-                    pass # Already has tags
+                    pass
                     
                 for desc, data in markers.items():
-                    if desc == 'TKEY':
-                        audio.tags.add(TKEY(encoding=3, text=[data.decode('utf-8', errors='ignore')]))
-                    elif desc == 'TBPM':
-                        audio.tags.add(TBPM(encoding=3, text=[data.decode('utf-8', errors='ignore')]))
-                    elif desc == 'TCOM':
-                        audio.tags.add(TCOM(encoding=3, text=[data.decode('utf-8', errors='ignore')]))
-                    else:
+                    decoded_data = data.decode('utf-8', errors='ignore')
+                    
+                    if desc == 'KEY': audio.tags.add(TKEY(encoding=3, text=[decoded_data]))
+                    elif desc == 'BPM': audio.tags.add(TBPM(encoding=3, text=[decoded_data]))
+                    elif desc == 'COMPOSER': audio.tags.add(TCOM(encoding=3, text=[decoded_data]))
+                    elif desc == 'GROUPING': audio.tags.add(TIT1(encoding=3, text=[decoded_data]))
+                    elif desc == 'COMMENT': audio.tags.add(COMM(encoding=3, lang='eng', desc='', text=[decoded_data]))
+                    elif desc == 'GENRE': audio.tags.add(TCON(encoding=3, text=[decoded_data]))
+                    elif "serato" in desc.lower():
+                        out_desc = desc
+                        if out_desc.lower().startswith("serato_"):
+                            out_desc = out_desc.replace('_', ' ').title().replace('Serato ', 'Serato ')
+                            
                         audio.tags.add(GEOB(
                             encoding=0, 
                             mime='application/octet-stream', 
-                            desc=desc, 
+                            desc=out_desc, 
                             data=data
                         ))
                 audio.save()
