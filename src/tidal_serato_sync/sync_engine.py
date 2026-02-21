@@ -344,7 +344,7 @@ class SyncEngine:
                                 for c_name in crates_modified:
                                     print(f"   - {c_name}")
                             
-                            self.db.update_track_status(original_path_str, 'downloaded', str(final_target_path))
+                            self.db.update_track_status(original_path_str, 'synced', str(final_target_path))
                             print(f"🎉 Descarga completada -> {final_target_path.name}")
                             
                         else:
