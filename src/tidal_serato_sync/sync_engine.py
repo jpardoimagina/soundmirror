@@ -233,28 +233,31 @@ class SyncEngine:
             try:
                 import shutil
                 import os
+                import json
+                from .metadata_handler import MetadataCloner
+                from .crate_handler import CrateHandler
                 
-                # Create a temporary directory for downloads
-                temp_download_dir = Path("./_recovery_temp")
-                if temp_download_dir.exists():
-                    shutil.rmtree(temp_download_dir)
-                temp_download_dir.mkdir(parents=True, exist_ok=True)
+                # Get the default tidal-dl download path
+                config_path = Path.home() / '.tidal-dl.json'
+                download_base_dir = Path("./_recovery_temp") # Fallback
                 
-                # Configure tidal-dl-ng to use this temp dir globally for this run
-                # Disable subfolders to verify file easily
-                subprocess.run([td_bin, "cfg", "download_path", str(temp_download_dir.absolute())], check=True)
+                if config_path.exists():
+                    try:
+                        with open(config_path, 'r') as f:
+                            td_config = json.load(f)
+                            if 'downloadPath' in td_config:
+                                download_base_dir = Path(td_config['downloadPath'])
+                    except Exception as e:
+                        logging.warning(f"Could not parse tidal-dl config: {e}")
+                
+                download_base_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Disable subfolders globally for this session to ensure flat download in target dir
                 subprocess.run([td_bin, "cfg", "album_folder", "false"], check=False)
                 subprocess.run([td_bin, "cfg", "artist_folder", "false"], check=False)
                 subprocess.run([td_bin, "cfg", "playlist_folder", "false"], check=False)
 
                 for i in range(0, len(commands), 2):
-                    # Clear temp dir for next track
-                    for f in temp_download_dir.glob("*"):
-                        if f.is_file():
-                            f.unlink()
-                        elif f.is_dir():
-                            shutil.rmtree(f)
-
                     comment = commands[i] # # Track: /path/to/file
                     cmd = commands[i+1]    # tidal-dl ...
                     original_path_str = comment[9:] # Remove "# Track: "
@@ -270,57 +273,85 @@ class SyncEngine:
                     print(f"==================================================")
                     
                     try:
-                        # Execute download (it will go to temp_download_dir)
+                        # Snapshot files in the download base dir before download
+                        files_before = set(f.name for f in download_base_dir.iterdir() if f.is_file())
+                        
+                        # Execute download
                         subprocess.run(cmd, shell=True, check=True)
                         
-                        # Find the downloaded file
-                        downloaded_files = list(temp_download_dir.glob("*"))
-                        # Filter out hidden files or system files if any (e.g. .DS_Store)
-                        downloaded_files = [f for f in downloaded_files if f.is_file() and not f.name.startswith('.')]
+                        # Snapshot files in the download base dir after download to find new file
+                        files_after = set(f.name for f in download_base_dir.iterdir() if f.is_file())
+                        new_files = list(files_after - files_before)
                         
-                        if downloaded_files:
+                        # Filter out OS files
+                        new_files = [f for f in new_files if not f.startswith('.')]
+                        
+                        if new_files:
                             # Assuming one file downloaded per command
-                            downloaded_file = downloaded_files[0]
+                            downloaded_file = download_base_dir / new_files[0]
                             
                             # Construct final target path
-                            # Use original stem (filename without extension) + new extension
                             final_target_filename = original_path_obj.stem + downloaded_file.suffix
                             final_target_path = target_dir / final_target_filename
                             
-                            # Backup logic
-                            # Check if final target exists (e.g. we are upgrading same extension file)
+                            print("🔍 Extrayendo metadata y Serato Cue Points originales...")
+                            markers = MetadataCloner.extract_serato_markers(str(original_path_obj))
+                            
+                            print("💉 Inyectando metadata en el nuevo archivo...")
+                            # It's better to inject metadata from the downloaded location before moving, 
+                            # or after moving. Let's do it after moving to final target so it's not lost.
+                            
+                            # Check if final target exists
                             if final_target_path.exists():
                                 backup_path = target_dir / f"BACKUP-{final_target_path.name}"
                                 print(f"⚠️  El archivo destino ya existe. Renombrando actual a: {backup_path.name}")
                                 final_target_path.rename(backup_path)
                             
-                            # Check if original path exists (if extension is different, e.g. replacing mp3 with flac)
-                            # We might want to backup the old mp3 too?
-                            # User said: "el antiguo tiens que poner el prefiujo BACKUP-"
                             if original_path_obj.exists() and original_path_obj != final_target_path:
-                                 backup_path_original = target_dir / f"BACKUP-{original_path_obj.name}"
-                                 print(f"⚠️  El archivo original (calidad previa?) existe. Renombrando a: {backup_path_original.name}")
-                                 original_path_obj.rename(backup_path_original)
+                                backup_path_original = target_dir / f"BACKUP-{original_path_obj.name}"
+                                print(f"⚠️  Renombrando archivo original a: {backup_path_original.name}")
+                                original_path_obj.rename(backup_path_original)
 
                             # Move downloaded file to final destination
                             shutil.move(str(downloaded_file), str(final_target_path))
                             
-                            print(f"✅ Descargado y movido a: {final_target_path.name}")
+                            # Inject tags into the new file
+                            if markers:
+                                success = MetadataCloner.inject_serato_markers(markers, str(final_target_path))
+                                if success:
+                                    print("✅ Metadata de Serato clonada exitosamente.")
+                                else:
+                                    print("⚠️  No se pudo inyectar la metadata de Serato.")
+                            else:
+                                print("ℹ️  El archivo original no contenía metadata de Serato detectable.")
+                            
+                            print("🔄 Actualizando base de datos local y Crates de Serato...")
+                            
+                            # Call crate update functionality globally
+                            config = self._load_config()
+                            serato_dir = config.get("settings", {}).get("serato_base_dir", "/Users/jpardo/Downloads/_Serato_")
+                            
+                            if original_path_str != str(final_target_path):
+                                crates_modified = CrateHandler.update_track_path_globally(
+                                    serato_dir, 
+                                    original_path_str, 
+                                    str(final_target_path)
+                                )
+                                print(f"✅ Se actualizaron las referencias en {crates_modified} Crates de Serato.")
+                            
                             self.db.update_track_status(original_path_str, 'downloaded', str(final_target_path))
+                            print(f"🎉 Descarga completada -> {final_target_path.name}")
+                            
                         else:
-                            print("ℹ️  No se detectó el archivo descargado en la carpeta temporal.")
+                            print("ℹ️  No se detectó el archivo descargado en la carpeta de tidal-dl.")
                             self.db.update_track_status(original_path_str, 'failed')
                             
                     except subprocess.CalledProcessError as e:
                         logging.error(f"Error al descargar: {e}")
                         self.db.update_track_status(original_path_str, 'failed')
                     except Exception as e:
-                        logging.error(f"Error inesperado: {e}")
+                        logging.error(f"Error inesperado procesando {original_path_obj.name}: {e}")
                         self.db.update_track_status(original_path_str, 'failed')
-
-                # Cleanup temp dir
-                if temp_download_dir.exists():
-                    shutil.rmtree(temp_download_dir)
 
             except KeyboardInterrupt:
                 print("\n\nOperación cancelada por el usuario (Ctrl+C). Saliendo...")
