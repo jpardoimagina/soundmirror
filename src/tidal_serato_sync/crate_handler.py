@@ -78,9 +78,16 @@ class CrateHandler:
                         
                         if sub_tag_str == 'ptrk':
                             path = sub_val.decode('utf-16-be').strip('\x00')
-                            if path == old_path:
+                            
+                            # Normalize paths for comparison (Serato stores without leading slash)
+                            norm_path = path.lstrip('/')
+                            norm_old_path = old_path.lstrip('/')
+                            
+                            if norm_path == norm_old_path:
                                 # Replace path
-                                new_val = new_path.encode('utf-16-be')
+                                # Ensure the new path also follows Serato's format (no leading slash)
+                                norm_new_path = new_path.lstrip('/')
+                                new_val = norm_new_path.encode('utf-16-be')
                                 new_len = len(new_val)
                                 new_otrk_value.extend(sub_tag)
                                 new_otrk_value.extend(struct.pack('>I', new_len))
