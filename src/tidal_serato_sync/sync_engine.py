@@ -175,8 +175,8 @@ class SyncEngine:
     def get_recovery_commands(self) -> List[str]:
         """Generates a list of shell commands to download missing tracks using tidal-dl-ng."""
         commands = []
-        # Use the absolute path to the binary in the musica environment
-        td_bin = "/Users/jpardo/.pyenv/versions/3.12.11/envs/musica/bin/tidal-dl-ng"
+        # Support custom tidal-dl-ng path via config or use system default
+        td_bin = self.config.get("settings", {}).get("tidal_dl_path", "tidal-dl-ng")
         
         with sqlite3.connect(self.db.db_path) as conn:
             cursor = conn.cursor()
@@ -198,7 +198,7 @@ class SyncEngine:
         # Note: Set default dry_run to False as requested by user (execution by default)
         
         # Configure quality in tidal-dl-ng before starting
-        td_bin = "/Users/jpardo/.pyenv/versions/3.12.11/envs/musica/bin/tidal-dl-ng"
+        td_bin = self.config.get("settings", {}).get("tidal_dl_path", "tidal-dl-ng")
         if not dry_run:
             import subprocess
             try:
