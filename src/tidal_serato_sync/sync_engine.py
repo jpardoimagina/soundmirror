@@ -251,11 +251,9 @@ class SyncEngine:
                         logging.warning(f"Could not parse tidal-dl config: {e}")
                 
                 download_base_dir.mkdir(parents=True, exist_ok=True)
-                
-                # Disable subfolders globally for this session to ensure flat download in target dir
-                subprocess.run([td_bin, "cfg", "album_folder", "false"], check=False)
-                subprocess.run([td_bin, "cfg", "artist_folder", "false"], check=False)
-                subprocess.run([td_bin, "cfg", "playlist_folder", "false"], check=False)
+                # tidal-dl-ng downloads individual tracks into a "Tracks" subfolder
+                tracks_download_dir = download_base_dir / "Tracks"
+                tracks_download_dir.mkdir(parents=True, exist_ok=True)
 
                 for i in range(0, len(commands), 2):
                     comment = commands[i] # # Track: /path/to/file
@@ -273,14 +271,14 @@ class SyncEngine:
                     print(f"==================================================")
                     
                     try:
-                        # Snapshot files in the download base dir before download
-                        files_before = set(f.name for f in download_base_dir.iterdir() if f.is_file())
+                        # Snapshot files in the Tracks dir before download
+                        files_before = set(f.name for f in tracks_download_dir.iterdir() if f.is_file())
                         
                         # Execute download
                         subprocess.run(cmd, shell=True, check=True)
                         
-                        # Snapshot files in the download base dir after download to find new file
-                        files_after = set(f.name for f in download_base_dir.iterdir() if f.is_file())
+                        # Snapshot files in the Tracks dir after download to find new file
+                        files_after = set(f.name for f in tracks_download_dir.iterdir() if f.is_file())
                         new_files = list(files_after - files_before)
                         
                         # Filter out OS files
@@ -288,7 +286,7 @@ class SyncEngine:
                         
                         if new_files:
                             # Assuming one file downloaded per command
-                            downloaded_file = download_base_dir / new_files[0]
+                            downloaded_file = tracks_download_dir / new_files[0]
                             
                             # Construct final target path
                             final_target_filename = original_path_obj.stem + downloaded_file.suffix
