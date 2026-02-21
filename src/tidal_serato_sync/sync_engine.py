@@ -254,9 +254,6 @@ class SyncEngine:
                             logging.warning(f"Could not parse tidal-dl config: {e}")
                 
                 download_base_dir.mkdir(parents=True, exist_ok=True)
-                # tidal-dl-ng downloads individual tracks into a "Tracks" subfolder
-                tracks_download_dir = download_base_dir / "Tracks"
-                tracks_download_dir.mkdir(parents=True, exist_ok=True)
 
                 for i in range(0, len(commands), 2):
                     comment = commands[i] # # Track: /path/to/file
@@ -349,7 +346,8 @@ class SyncEngine:
                             print(f"🎉 Descarga completada -> {final_target_path.name}")
                             
                         else:
-                            print("ℹ️  No se detectó el archivo descargado en la carpeta de tidal-dl.")
+                            print("ℹ️  No se detectó ningún archivo NUEVO en la ruta temporal.")
+                            print("    (Si el FLAC ya existía allí de antes debido a un error previo, bórralo manualmente para que soundmirror pueda interceptar la nueva descarga completa).")
                             self.db.update_track_status(original_path_str, 'failed')
                             
                     except subprocess.CalledProcessError as e:
