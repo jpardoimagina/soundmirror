@@ -169,15 +169,31 @@ class SyncEngine:
                 '-v', 'quiet', 
                 '-print_format', 'json', 
                 '-show_format', 
+                '-show_streams',
                 str(file_path)
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
                 data = json.loads(result.stdout)
-                bitrate = int(data['format'].get('bit_rate', 0)) // 1000
+                bitrate = int(data.get('format', {}).get('bit_rate', 0) or 0) // 1000
+                
+                if bitrate <= 0:
+                    for stream in data.get('streams', []):
+                        if stream.get('codec_type') == 'audio':
+                            bitrate = int(stream.get('bit_rate', 0) or 0) // 1000
+                            if bitrate > 0:
+                                break
+                                
+                if bitrate <= 0 and file_path.suffix.lower() == '.flac':
+                    bitrate = 900
+                    
                 return bitrate if bitrate > 0 else None
         except Exception as e:
             logging.debug(f"Error extracting bitrate for {file_path.name}: {e}")
+            
+        if file_path.suffix.lower() == '.flac':
+            return 900
+            
         return None
 
     def get_recovery_commands(self) -> List[str]:
