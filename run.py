@@ -20,7 +20,7 @@ def setup_environment():
 def main():
     setup_environment()
     
-    from cli import main as cli_main
+    from tidal_serato_sync.cli import main as cli_main
     cli_main()
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 import argparse
 import sys
 import json
+import sqlite3
 from pathlib import Path
 from .crate_handler import CrateHandler
 from .db_manager import DatabaseManager
@@ -44,6 +45,14 @@ def main():
     recover_parser.add_argument("--quality", choices=["LOW", "NORMAL", "HIGH", "LOSSLESS", "HI_RES_LOSSLESS"], 
                                default="LOSSLESS", help="Calidad de audio para la descarga")
     recover_parser.add_argument("--temp-dir", type=str, help="Ruta temporal donde tidal-dl-ng deja las descargas (ej. /Users/jpardo/Music/Tracks)")
+
+    # Command: list-tracks
+    list_tracks_parser = subparsers.add_parser("list-tracks", help="Muestra el estado de todas las canciones en mapeo")
+    list_tracks_parser.add_argument("--status", type=str, help="Filtrar por estado (ej. pending_download, synced, failed)")
+
+    # Command: force
+    force_parser = subparsers.add_parser("force", help="Fuerza el estado pending_download para una canción")
+    force_parser.add_argument("path", type=str, help="Ruta de la canción (ej. /Users/.../archivo.mp3) o nombre parcial")
 
     args = parser.parse_args()
 
@@ -136,6 +145,38 @@ def main():
     elif args.command == "recover":
         engine = SyncEngine()
         engine.run_recovery(dry_run=args.dry, quality=args.quality, temp_dir=args.temp_dir)
+
+    elif args.command == "list-tracks":
+        with sqlite3.connect(db.db_path) as conn:
+            cursor = conn.cursor()
+            if args.status:
+                cursor.execute("SELECT local_path, status, bitrate FROM track_mapping WHERE status = ?", (args.status,))
+            else:
+                cursor.execute("SELECT local_path, status, bitrate FROM track_mapping")
+                
+            rows = cursor.fetchall()
+            print(f"Total canciones encontradas: {len(rows)}\n")
+            for path, status, bitrate in rows:
+                bitrate_str = f" ({bitrate}kbps)" if bitrate else ""
+                print(f"[{status.upper()}] {Path(path).name}{bitrate_str}")
+
+    elif args.command == "force":
+        with sqlite3.connect(db.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT local_path FROM track_mapping WHERE local_path LIKE ?", (f"%{args.path}%",))
+            matches = cursor.fetchall()
+            
+            if not matches:
+                print(f"No se encontró ninguna canción que coincida con: {args.path}")
+            elif len(matches) > 1:
+                print(f"Búsqueda ambigua. Hay {len(matches)} canciones que coinciden:")
+                for m in matches:
+                    print(f"  - {m[0]}")
+                print("Por favor, sé más específico.")
+            else:
+                target_path = matches[0][0]
+                db.update_track_status(target_path, 'pending_download')
+                print(f"✅ Canción forzada a pending_download:\n   {target_path}")
 
     else:
         parser.print_help()
