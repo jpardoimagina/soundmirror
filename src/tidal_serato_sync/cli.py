@@ -58,6 +58,9 @@ def main():
     # Command: cleanup
     cleanup_parser = subparsers.add_parser("cleanup", help="Borra del disco los archivos de backup antiguos (.bak) y limpia la base de datos")
 
+    # Command: clear-tracks
+    clear_tracks_parser = subparsers.add_parser("clear-tracks", help="Elimina TODOS los tracks locales de la lista de seguimiento (vacía la caché)")
+
     args = parser.parse_args()
 
     # Load configuration
@@ -209,6 +212,20 @@ def main():
                 
                 conn.commit()
                 print(f"\n✅ Limpieza completada. {deleted} archivos/registros eliminados.")
+
+    elif args.command == "clear-tracks":
+        print("⚠️  ¡ATENCIÓN! Esto eliminará el registro de TODOS los tracks sincronizados en la base de datos local.")
+        print("    Tendrás que volver a ejecutar 'sync' para que soundmirror escanee Serato de nuevo.")
+        confirm = input("¿Estás seguro de querer vaciar la lista de tracks? (s/N): ")
+        if confirm.lower() == 's':
+            with sqlite3.connect(db.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM track_mapping")
+                deleted = cursor.rowcount
+                conn.commit()
+                print(f"🗑️  ¡Lista vaciada! (Se han eliminado {deleted} registros de seguimiento).")
+        else:
+            print("❌ Operación cancelada.")
 
     else:
         parser.print_help()
