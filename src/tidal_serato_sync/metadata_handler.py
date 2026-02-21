@@ -34,6 +34,13 @@ class MetadataCloner:
                     elif key == 'TBPM': tags_extracted['BPM'] = str(frame.text[0]).replace('\x00', '').encode('utf-8')
                     elif key == 'TCOM': tags_extracted['COMPOSER'] = str(frame.text[0]).replace('\x00', '').encode('utf-8')
                     elif key == 'TIT1': tags_extracted['GROUPING'] = str(frame.text[0]).replace('\x00', '').encode('utf-8')
+                    elif key == 'TPUB': tags_extracted['LABEL'] = str(frame.text[0]).replace('\x00', '').encode('utf-8')
+                    elif key.startswith('POPM'):
+                        # mutagen's POPM frame has .rating (0-255) and .email
+                        try:
+                            tags_extracted[f'POPM_{frame.email}'] = str(frame.rating).encode('utf-8')
+                        except Exception:
+                            pass
                     elif key.startswith('COMM'):
                         if frame.text:
                             desc = getattr(frame, 'desc', '')
@@ -51,8 +58,9 @@ class MetadataCloner:
                                 tags_extracted[key] = base64.b64decode(values[0])
                             except Exception as e:
                                 logger.error(f"Error decoding base64 Serato tag {key} in FLAC: {e}")
-                        elif key_lower in ['key', 'bpm', 'composer', 'grouping', 'comment', 'genre']:
-                            tags_extracted[key_lower.upper()] = values[0].encode('utf-8')
+                        elif key_lower in ['key', 'bpm', 'composer', 'grouping', 'comment', 'genre', 'label', 'publisher', 'rating']:
+                            # Normalize publisher to label internally
+                            tags_extracted['LABEL' if key_lower == 'publisher' else key_lower.upper()] = values[0].encode('utf-8')
 
             # -- 3. If MP4/M4A (has Atom tags)
             elif isinstance(audio, MP4):
@@ -87,6 +95,10 @@ class MetadataCloner:
                         elif key == '\xa9grp': tags_extracted['GROUPING'] = values[0].encode('utf-8')
                         elif key == '\xa9cmt': tags_extracted['COMMENT'] = values[0].encode('utf-8')
                         elif key == '\xa9gen': tags_extracted['GENRE'] = values[0].encode('utf-8')
+                        elif key == '\xa9pub' or key.lower() == '----:com.apple.itunes:publisher' or key == '----:com.apple.itunes:label':
+                            tags_extracted['LABEL'] = values[0] if isinstance(values[0], bytes) else str(values[0]).encode('utf-8')
+                        elif key == 'rate' or key.lower() == '----:com.apple.itunes:rating':
+                            tags_extracted['RATING'] = str(values[0]).encode('utf-8')
                         elif key == '----:com.apple.iTunes:KEY' or key == '----:com.apple.iTunes:initialkey':
                             tags_extracted['KEY'] = bytes(values[0])
                         elif key == 'tmpo':
@@ -111,10 +123,13 @@ class MetadataCloner:
 
             if isinstance(audio, FLAC):
                 for desc, data in markers.items():
-                    if desc in ['KEY', 'BPM', 'COMPOSER', 'GROUPING', 'COMMENT', 'GENRE']:
-                        audio.tags[desc] = data.decode('utf-8', errors='ignore')
-                    elif desc in ['TKEY', 'TBPM', 'TCOM', 'TIT1', 'COMM', 'TCON']: 
-                        mapping = {'TKEY':'KEY', 'TBPM':'BPM', 'TCOM':'COMPOSER', 'TIT1':'GROUPING', 'COMM':'COMMENT', 'TCON':'GENRE'}
+                    if desc in ['KEY', 'BPM', 'COMPOSER', 'GROUPING', 'COMMENT', 'GENRE', 'LABEL', 'RATING']:
+                        flac_key = 'PUBLISHER' if desc == 'LABEL' else desc
+                        audio.tags[flac_key] = data.decode('utf-8', errors='ignore')
+                    elif desc.startswith('POPM_'):
+                        audio.tags['RATING'] = data.decode('utf-8', errors='ignore')
+                    elif desc in ['TKEY', 'TBPM', 'TCOM', 'TIT1', 'COMM', 'TCON', 'TPUB']: 
+                        mapping = {'TKEY':'KEY', 'TBPM':'BPM', 'TCOM':'COMPOSER', 'TIT1':'GROUPING', 'COMM':'COMMENT', 'TCON':'GENRE', 'TPUB':'PUBLISHER'}
                         audio.tags[mapping[desc]] = data.decode('utf-8', errors='ignore')
                     elif "serato" in desc.lower():
                         if desc.lower().startswith("serato_"):
@@ -129,7 +144,7 @@ class MetadataCloner:
                 
             elif hasattr(audio, 'tags') and audio.tags is not None and not isinstance(audio, MP4):
                 # ID3 injection
-                from mutagen.id3 import GEOB, TKEY, TBPM, TCOM, TIT1, COMM, TCON
+                from mutagen.id3 import GEOB, TKEY, TBPM, TCOM, TIT1, COMM, TCON, TPUB
                 try:
                     audio.add_tags()
                 except Exception:
@@ -144,6 +159,20 @@ class MetadataCloner:
                     elif desc == 'GROUPING': audio.tags.add(TIT1(encoding=3, text=[decoded_data]))
                     elif desc == 'COMMENT': audio.tags.add(COMM(encoding=3, lang='eng', desc='', text=[decoded_data]))
                     elif desc == 'GENRE': audio.tags.add(TCON(encoding=3, text=[decoded_data]))
+                    elif desc == 'LABEL' or desc == 'TPUB': audio.tags.add(TPUB(encoding=3, text=[decoded_data]))
+                    elif desc == 'RATING':
+                        try:
+                            from mutagen.id3 import POPM
+                            audio.tags.add(POPM(encoding=3, email='serato.com', rating=int(decoded_data), count=0))
+                        except Exception:
+                            pass
+                    elif desc.startswith('POPM_'):
+                        try:
+                            from mutagen.id3 import POPM
+                            email = desc.split('_', 1)[1] if '_' in desc else 'serato.com'
+                            audio.tags.add(POPM(encoding=3, email=email, rating=int(decoded_data), count=0))
+                        except Exception:
+                            pass
                     elif "serato" in desc.lower():
                         out_desc = desc
                         if out_desc.lower().startswith("serato_"):
