@@ -26,15 +26,20 @@ class MetadataCloner:
                 for key, frame in audio.tags.items():
                     # Serato GEOB
                     if key.startswith("GEOB") and hasattr(frame, 'desc') and frame.desc.startswith("Serato"):
-                        tags_extracted[frame.desc] = frame.data
+                        clean_desc = frame.desc.replace('\x00', '')
+                        tags_extracted[clean_desc] = frame.data
                         
                     # Standard tags
-                    elif key == 'TKEY': tags_extracted['KEY'] = frame.text[0].encode('utf-8')
-                    elif key == 'TBPM': tags_extracted['BPM'] = frame.text[0].encode('utf-8')
-                    elif key == 'TCOM': tags_extracted['COMPOSER'] = frame.text[0].encode('utf-8')
-                    elif key == 'TIT1': tags_extracted['GROUPING'] = frame.text[0].encode('utf-8')
+                    elif key == 'TKEY': tags_extracted['KEY'] = str(frame.text[0]).replace('\x00', '').encode('utf-8')
+                    elif key == 'TBPM': tags_extracted['BPM'] = str(frame.text[0]).replace('\x00', '').encode('utf-8')
+                    elif key == 'TCOM': tags_extracted['COMPOSER'] = str(frame.text[0]).replace('\x00', '').encode('utf-8')
+                    elif key == 'TIT1': tags_extracted['GROUPING'] = str(frame.text[0]).replace('\x00', '').encode('utf-8')
                     elif key.startswith('COMM'):
-                        if frame.text: tags_extracted['COMMENT'] = frame.text[0].encode('utf-8')
+                        if frame.text:
+                            desc = getattr(frame, 'desc', '')
+                            # avoid weird iTunPGAP or hex data masquerading as comments
+                            if 'itun' not in desc.lower():
+                                tags_extracted['COMMENT'] = str(frame.text[0]).replace('\x00', '').encode('utf-8')
 
             # -- 2. If FLAC (has Vorbis comments)
             elif isinstance(audio, FLAC):
