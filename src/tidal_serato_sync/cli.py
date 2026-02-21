@@ -43,6 +43,7 @@ def main():
     recover_parser.add_argument("--dry", action="store_true", help="Solo muestra lo que se descargaría")
     recover_parser.add_argument("--quality", choices=["LOW", "NORMAL", "HIGH", "LOSSLESS", "HI_RES_LOSSLESS"], 
                                default="LOSSLESS", help="Calidad de audio para la descarga")
+    recover_parser.add_argument("--temp-dir", type=str, help="Ruta temporal donde tidal-dl-ng deja las descargas (ej. /Users/jpardo/Music/Tracks)")
 
     args = parser.parse_args()
 
@@ -134,7 +135,7 @@ def main():
 
     elif args.command == "recover":
         engine = SyncEngine()
-        engine.run_recovery(dry_run=args.dry, quality=args.quality)
+        engine.run_recovery(dry_run=args.dry, quality=args.quality, temp_dir=args.temp_dir)
 
     else:
         parser.print_help()

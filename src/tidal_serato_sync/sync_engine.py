@@ -193,7 +193,7 @@ class SyncEngine:
         
         return commands
 
-    def run_recovery(self, dry_run: bool = False, quality: str = "LOSSLESS"):
+    def run_recovery(self, dry_run: bool = False, quality: str = "LOSSLESS", temp_dir: Optional[str] = None):
         """Executes recovery commands or just prints them if dry_run is True."""
         # Note: Set default dry_run to False as requested by user (execution by default)
         
@@ -237,18 +237,21 @@ class SyncEngine:
                 from .metadata_handler import MetadataCloner
                 from .crate_handler import CrateHandler
                 
-                # Get the default tidal-dl download path
-                config_path = Path.home() / '.tidal-dl.json'
                 download_base_dir = Path("./_recovery_temp") # Fallback
                 
-                if config_path.exists():
-                    try:
-                        with open(config_path, 'r') as f:
-                            td_config = json.load(f)
-                            if 'downloadPath' in td_config:
-                                download_base_dir = Path(td_config['downloadPath'])
-                    except Exception as e:
-                        logging.warning(f"Could not parse tidal-dl config: {e}")
+                if temp_dir:
+                    download_base_dir = Path(temp_dir)
+                else:
+                    # Get the default tidal-dl download path if not explicitly provided
+                    config_path = Path.home() / '.tidal-dl.json'
+                    if config_path.exists():
+                        try:
+                            with open(config_path, 'r') as f:
+                                td_config = json.load(f)
+                                if 'downloadPath' in td_config:
+                                    download_base_dir = Path(td_config['downloadPath'])
+                        except Exception as e:
+                            logging.warning(f"Could not parse tidal-dl config: {e}")
                 
                 download_base_dir.mkdir(parents=True, exist_ok=True)
                 # tidal-dl-ng downloads individual tracks into a "Tracks" subfolder
