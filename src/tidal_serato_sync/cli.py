@@ -54,6 +54,9 @@ def main():
     force_parser = subparsers.add_parser("force", help="Fuerza el estado pending_download para una canción")
     force_parser.add_argument("path", type=str, help="Ruta de la canción (ej. /Users/.../archivo.mp3) o nombre parcial")
 
+    # Command: cleanup
+    cleanup_parser = subparsers.add_parser("cleanup", help="Borra del disco los archivos de backup antiguos (.bak) y limpia la base de datos")
+
     args = parser.parse_args()
 
     # Load configuration
@@ -177,6 +180,33 @@ def main():
                 target_path = matches[0][0]
                 db.update_track_status(target_path, 'pending_download')
                 print(f"✅ Canción forzada a pending_download:\n   {target_path}")
+
+    elif args.command == "cleanup":
+        with sqlite3.connect(db.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT local_path, downloaded_path FROM track_mapping WHERE status = 'pending_cleanup'")
+            rows = cursor.fetchall()
+            
+            if not rows:
+                print("ℹ️  No hay archivos pendientes de limpieza.")
+            else:
+                deleted = 0
+                for path, backup_path_str in rows:
+                    if backup_path_str:
+                        backup_file = Path(backup_path_str)
+                        if backup_file.exists():
+                            try:
+                                backup_file.unlink()
+                                print(f"🗑️  Borrado: {backup_file.name}")
+                            except Exception as e:
+                                print(f"⚠️  No se pudo borrar {backup_file.name}: {e}")
+                    
+                    # Delete the row from the database completely
+                    cursor.execute("DELETE FROM track_mapping WHERE local_path = ?", (path,))
+                    deleted += 1
+                
+                conn.commit()
+                print(f"\n✅ Limpieza completada. {deleted} archivos/registros eliminados.")
 
     else:
         parser.print_help()

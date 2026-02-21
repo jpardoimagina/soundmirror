@@ -262,6 +262,9 @@ class SyncEngine:
                     original_path_obj = Path(original_path_str)
                     target_dir = original_path_obj.parent
                     
+                    # Extract tidal_id from command
+                    tidal_id = cmd.split("/track/")[-1].strip('"')
+                    
                     if not target_dir.exists():
                         target_dir.mkdir(parents=True, exist_ok=True)
                         
@@ -310,10 +313,12 @@ class SyncEngine:
                                 print(f"⚠️  El archivo destino ya existe. Renombrando actual a: {backup_path.name}")
                                 final_target_path.rename(backup_path)
                             
+                            is_upgrade = False
                             if original_path_obj.exists() and original_path_obj != final_target_path:
                                 backup_path_original = target_dir / f"BACKUP-{original_path_obj.name}"
                                 print(f"⚠️  Renombrando archivo original a: {backup_path_original.name}")
                                 original_path_obj.rename(backup_path_original)
+                                is_upgrade = True
 
                             # Move downloaded file to final destination
                             shutil.move(str(downloaded_file), str(final_target_path))
@@ -344,7 +349,15 @@ class SyncEngine:
                                 for c_name in crates_modified:
                                     print(f"   - {c_name}")
                             
-                            self.db.update_track_status(original_path_str, 'synced', str(final_target_path))
+                            if is_upgrade:
+                                # Old file goes to pending_cleanup, keep track of backup location
+                                self.db.update_track_status(original_path_str, 'pending_cleanup', str(backup_path_original))
+                                # Register new file as synced
+                                self.db.upsert_track(str(final_target_path).lstrip('/'), tidal_id)
+                                self.db.update_track_status(str(final_target_path), 'synced', str(final_target_path))
+                            else:
+                                self.db.update_track_status(original_path_str, 'synced', str(final_target_path))
+                                
                             print(f"🎉 Descarga completada -> {final_target_path.name}")
                             
                         else:
