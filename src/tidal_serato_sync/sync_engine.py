@@ -41,13 +41,17 @@ class SyncEngine:
                 "playlist_id": playlist_id,
                 "direction": direction,
                 "playlist_name": playlist_name or Path(crate_path).stem,
-                "max_bitrate": max_bitrate
+                "max_bitrate": max_bitrate,
+                "force_update": force_update
             }
             self.sync_mirror(mirror)
 
     def sync_mirror(self, mirror):
         crate_path = mirror.get("crate_path")
         playlist_name = mirror.get("playlist_name")
+        max_bitrate = mirror.get("max_bitrate")
+        force_update = mirror.get("force_update", False)
+        
         logging.info(f"Syncing crate {Path(crate_path).name} <-> Tidal '{playlist_name}'")
 
         # 1. Read Serato Crate
