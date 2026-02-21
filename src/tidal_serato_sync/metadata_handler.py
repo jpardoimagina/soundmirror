@@ -64,7 +64,21 @@ class MetadataCloner:
                             elif desc == "overview": desc_mapped = "Serato Overview"
                             elif desc == "analysisVersion": desc_mapped = "Serato Analysis"
                             else: desc_mapped = "Serato " + desc.title()
-                            tags_extracted[desc_mapped] = bytes(values[0])
+                            
+                            try:
+                                import re
+                                b64_str = values[0] if isinstance(values[0], bytes) else str(values[0]).encode('ascii')
+                                b64_str = re.sub(b'[^A-Za-z0-9+/]', b'', b64_str)
+                                b64_str += b'=' * (-len(b64_str) % 4)
+                                raw = base64.b64decode(b64_str)
+                                
+                                parts = raw.split(b'\x00', 2)
+                                if len(parts) >= 3 and b'Serato' in parts[1]:
+                                    tags_extracted[desc_mapped] = parts[2]
+                                else:
+                                    tags_extracted[desc_mapped] = raw
+                            except Exception as e:
+                                logger.error(f"Error decoding base64 Serato tag {desc} in MP4: {e}")
                         elif key == '\xa9grp': tags_extracted['GROUPING'] = values[0].encode('utf-8')
                         elif key == '\xa9cmt': tags_extracted['COMMENT'] = values[0].encode('utf-8')
                         elif key == '\xa9gen': tags_extracted['GENRE'] = values[0].encode('utf-8')
