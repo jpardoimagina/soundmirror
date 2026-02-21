@@ -135,18 +135,18 @@ class CrateHandler:
         return list(subcrates_path.glob("*.crate"))
 
     @staticmethod
-    def update_track_path_globally(serato_dir: str, old_path: str, new_path: str) -> int:
+    def update_track_path_globally(serato_dir: str, old_path: str, new_path: str) -> List[str]:
         """
         Iterates all crates and replaces the track path.
-        Returns the number of crates modified.
+        Returns a list of the names of crates that were modified.
         """
         crates = CrateHandler.list_all_crates(serato_dir)
-        modified_count = 0
+        modified_crates = []
         for crate_path in crates:
             handler = CrateHandler(str(crate_path))
             if handler.replace_track_path(old_path, new_path):
-                modified_count += 1
-        return modified_count
+                modified_crates.append(crate_path.name)
+        return modified_crates
 
 if __name__ == "__main__":
     # Example usage / quick test
