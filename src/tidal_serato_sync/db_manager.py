@@ -145,6 +145,13 @@ class DatabaseManager:
             """, (crate_path, crate_name, playlist_id, direction, is_active))
             conn.commit()
 
+    def remove_mirror(self, crate_path: str):
+        """Removes a mirror from the database when the crate no longer exists."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM mirror_config WHERE crate_path = ?", (str(crate_path),))
+            conn.commit()
+
     def get_mirrors(self, only_active: bool = False):
         """Returns all configured mirrors."""
         query = "SELECT crate_path, tidal_playlist_id, sync_direction, is_active, crate_name FROM mirror_config"

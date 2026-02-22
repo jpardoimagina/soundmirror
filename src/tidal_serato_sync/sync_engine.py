@@ -45,7 +45,13 @@ class SyncEngine:
                 "force_update": force_update,
                 "orphan_crate": orphan_crate
             }
-            self.sync_mirror(mirror)
+            try:
+                self.sync_mirror(mirror)
+            except FileNotFoundError as e:
+                logging.warning(f"Crate {crate_path} not found. Removing from local mappings. ({e})")
+                self.db.remove_mirror(crate_path)
+            except Exception as e:
+                logging.error(f"Error syncing {crate_path}: {e}")
 
     def sync_mirror(self, mirror):
         crate_path = mirror.get("crate_path")
