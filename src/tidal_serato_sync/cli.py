@@ -151,8 +151,24 @@ def main():
         engine.run_sync(max_bitrate=args.max_bitrate, force_update=force_update)
 
     elif args.command == "recover":
+        # Handle temp_dir from config or save new one
+        if args.temp_dir:
+            temp_dir = args.temp_dir
+            if "settings" not in config:
+                config["settings"] = {}
+            if config["settings"].get("temp_dir") != temp_dir:
+                config["settings"]["temp_dir"] = temp_dir
+                try:
+                    with open(config_path, 'w') as f:
+                        json.dump(config, f, indent=2)
+                    print(f"ℹ️  Directorio temporal guardado en configuración: {temp_dir}")
+                except Exception as e:
+                    print(f"⚠️  No se pudo guardar temp_dir: {e}")
+        else:
+            temp_dir = config.get("settings", {}).get("temp_dir")
+
         engine = SyncEngine()
-        engine.run_recovery(dry_run=args.dry, quality=args.quality, temp_dir=args.temp_dir)
+        engine.run_recovery(dry_run=args.dry, quality=args.quality, temp_dir=temp_dir)
 
     elif args.command == "list-tracks":
         with sqlite3.connect(db.db_path) as conn:
