@@ -455,6 +455,35 @@ class SyncEngine:
                 print("\n\nOperación cancelada por el usuario (Ctrl+C). Saliendo...")
                 return
 
+    def _create_orphan_crate(self, crate_name: str, tracks: List[str], subcrates_dir: Path):
+        if not subcrates_dir.exists():
+            logging.error(f"Cannot create orphan crate: Subcrates directory '{subcrates_dir}' not found.")
+            return
+        
+        if not crate_name.endswith('.crate'):
+            crate_name += '.crate'
+            
+        crate_path = subcrates_dir / crate_name
+        handler = CrateHandler(str(crate_path))
+        
+        # Check existing tracks to prevent appending duplicates (optional, but good practice)
+        existing_tracks = set()
+        if crate_path.exists():
+            try:
+                for t in handler.get_tracks():
+                    existing_tracks.add(t['path'])
+            except Exception:
+                pass
+        
+        added = 0
+        for track_path in tracks:
+            if track_path not in existing_tracks:
+                if handler.add_track_to_crate(track_path):
+                    added += 1
+                
+        if added > 0:
+            logging.info(f"\033[93mAdded {added} missing tracks to Orphan Crate '{crate_name}'\033[0m")
+
 if __name__ == "__main__":
     engine = SyncEngine()
     engine.run_sync()
