@@ -151,10 +151,14 @@ class MetadataCloner:
                         mapping = {'TKEY':'key', 'TBPM':'bpm', 'TCOM':'composer', 'TIT1':'grouping', 'COMM':'comment', 'TCON':'genre', 'TPUB':'label'}
                         audio.tags[mapping[desc]] = data.decode('utf-8', errors='ignore')
                     elif "serato" in desc.lower():
-                        if desc.lower().startswith("serato_"):
-                            safe_key = desc.lower()
-                        else:
-                            safe_key = desc.replace(' ', '_').lower()
+                        # Explicit Vorbis Serato keys: 
+                        # 'Serato VidAssoc' -> 'serato_videoassociation', 'Serato Markers_' -> 'serato_markers_', etc.
+                        if desc == "Serato VidAssoc": safe_key = "serato_videoassociation"
+                        elif desc == "Serato RelVolAd": safe_key = "serato_relvol"
+                        elif desc == "Serato Playcount": safe_key = "serato_playcount"
+                        elif desc == "Serato Autotags": safe_key = "serato_autotags"
+                        elif desc == "Serato Markers2": safe_key = "serato_markers2"
+                        else: safe_key = desc.replace(' ', '_').lower()
                         b64_data = base64.b64encode(data).decode('ascii')
                         audio.tags[safe_key] = b64_data
                         
