@@ -44,9 +44,12 @@ class MetadataCloner:
                     elif key.startswith('COMM'):
                         if frame.text:
                             desc = getattr(frame, 'desc', '')
-                            # avoid weird iTunPGAP or hex data masquerading as comments
                             if 'itun' not in desc.lower():
                                 tags_extracted['COMMENT'] = str(frame.text[0]).replace('\x00', '').encode('utf-8')
+                    elif key.startswith('TXXX:'):
+                        desc = getattr(frame, 'desc', '').upper()
+                        if 'PLAYCOUNT' in desc: tags_extracted['SERATO_PLAYCOUNT'] = str(frame.text[0]).replace('\x00', '').encode('utf-8')
+                        elif 'RELVOL' in desc: tags_extracted['SERATO_RELVOL'] = str(frame.text[0]).replace('\x00', '').encode('utf-8')
 
             # -- 2. If FLAC (has Vorbis comments)
             elif isinstance(audio, FLAC):
@@ -76,6 +79,8 @@ class MetadataCloner:
                             elif desc == "autgain": desc_mapped = "Serato Autotags"
                             elif desc == "overview": desc_mapped = "Serato Overview"
                             elif desc == "analysisVersion": desc_mapped = "Serato Analysis"
+                            elif desc == "playcount": desc_mapped = "SERATO_PLAYCOUNT"
+                            elif desc == "relvol": desc_mapped = "SERATO_RELVOL"
                             else: desc_mapped = "Serato " + desc.title()
                             
                             try:
@@ -85,11 +90,14 @@ class MetadataCloner:
                                 b64_str += b'=' * (-len(b64_str) % 4)
                                 raw = base64.b64decode(b64_str)
                                 
-                                parts = raw.split(b'\x00', 2)
-                                if len(parts) >= 3 and b'Serato' in parts[1]:
-                                    tags_extracted[desc_mapped] = parts[2]
+                                if desc_mapped in ["SERATO_PLAYCOUNT", "SERATO_RELVOL"]:
+                                    tags_extracted[desc_mapped] = raw.split(b'\x00')[0]
                                 else:
-                                    tags_extracted[desc_mapped] = raw
+                                    parts = raw.split(b'\x00', 2)
+                                    if len(parts) >= 3 and b'Serato' in parts[1]:
+                                        tags_extracted[desc_mapped] = parts[2]
+                                    else:
+                                        tags_extracted[desc_mapped] = raw
                             except Exception as e:
                                 logger.error(f"Error decoding base64 Serato tag {desc} in MP4: {e}")
                         elif key == '\xa9grp': tags_extracted['GROUPING'] = values[0].encode('utf-8')
@@ -124,12 +132,13 @@ class MetadataCloner:
             if isinstance(audio, FLAC):
                 for desc, data in markers.items():
                     if desc in ['KEY', 'BPM', 'COMPOSER', 'GROUPING', 'COMMENT', 'GENRE', 'LABEL', 'RATING']:
-                        flac_key = 'PUBLISHER' if desc == 'LABEL' else desc
-                        audio.tags[flac_key] = data.decode('utf-8', errors='ignore')
+                        audio.tags[desc.lower()] = data.decode('utf-8', errors='ignore')
+                    elif desc in ['SERATO_PLAYCOUNT', 'SERATO_RELVOL']:
+                        audio.tags[desc.lower()] = data.decode('utf-8', errors='ignore')
                     elif desc.startswith('POPM_'):
-                        audio.tags['RATING'] = data.decode('utf-8', errors='ignore')
+                        audio.tags['rating'] = data.decode('utf-8', errors='ignore')
                     elif desc in ['TKEY', 'TBPM', 'TCOM', 'TIT1', 'COMM', 'TCON', 'TPUB']: 
-                        mapping = {'TKEY':'KEY', 'TBPM':'BPM', 'TCOM':'COMPOSER', 'TIT1':'GROUPING', 'COMM':'COMMENT', 'TCON':'GENRE', 'TPUB':'PUBLISHER'}
+                        mapping = {'TKEY':'key', 'TBPM':'bpm', 'TCOM':'composer', 'TIT1':'grouping', 'COMM':'comment', 'TCON':'genre', 'TPUB':'label'}
                         audio.tags[mapping[desc]] = data.decode('utf-8', errors='ignore')
                     elif "serato" in desc.lower():
                         if desc.lower().startswith("serato_"):
@@ -144,7 +153,7 @@ class MetadataCloner:
                 
             elif hasattr(audio, 'tags') and audio.tags is not None and not isinstance(audio, MP4):
                 # ID3 injection
-                from mutagen.id3 import GEOB, TKEY, TBPM, TCOM, TIT1, COMM, TCON, TPUB
+                from mutagen.id3 import GEOB, TKEY, TBPM, TCOM, TIT1, COMM, TCON, TPUB, TXXX
                 try:
                     audio.add_tags()
                 except Exception:
@@ -160,6 +169,8 @@ class MetadataCloner:
                     elif desc == 'COMMENT': audio.tags.add(COMM(encoding=3, lang='eng', desc='', text=[decoded_data]))
                     elif desc == 'GENRE': audio.tags.add(TCON(encoding=3, text=[decoded_data]))
                     elif desc == 'LABEL' or desc == 'TPUB': audio.tags.add(TPUB(encoding=3, text=[decoded_data]))
+                    elif desc == 'SERATO_PLAYCOUNT': audio.tags.add(TXXX(encoding=3, desc='SERATO_PLAYCOUNT', text=[decoded_data]))
+                    elif desc == 'SERATO_RELVOL': audio.tags.add(TXXX(encoding=3, desc='SERATO_RELVOL', text=[decoded_data]))
                     elif desc == 'RATING':
                         try:
                             from mutagen.id3 import POPM
