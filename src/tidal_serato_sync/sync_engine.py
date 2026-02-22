@@ -22,7 +22,7 @@ class SyncEngine:
         with open(self.config_path, 'r') as f:
             return json.load(f)
 
-    def run_sync(self, max_bitrate: Optional[int] = None, force_update: bool = False):
+    def run_sync(self, max_bitrate: Optional[int] = None, force_update: bool = False, orphan_crate: Optional[str] = None):
         """Executes the synchronization for all active mirrors in the database."""
         if not self.tidal.authenticate():
             logging.error("Failed to authenticate with Tidal.")
@@ -42,7 +42,8 @@ class SyncEngine:
                 "direction": direction,
                 "playlist_name": playlist_name or Path(crate_path).stem,
                 "max_bitrate": max_bitrate,
-                "force_update": force_update
+                "force_update": force_update,
+                "orphan_crate": orphan_crate
             }
             self.sync_mirror(mirror)
 
@@ -51,6 +52,7 @@ class SyncEngine:
         playlist_name = mirror.get("playlist_name")
         max_bitrate = mirror.get("max_bitrate")
         force_update = mirror.get("force_update", False)
+        orphan_crate_name = mirror.get("orphan_crate", None)
         
         logging.info(f"Syncing crate {Path(crate_path).name} <-> Tidal '{playlist_name}'")
 
@@ -79,6 +81,7 @@ class SyncEngine:
 
         # 3. Synchronize Serato -> Tidal
         found_on_tidal = []
+        orphaned_tracks = []
         max_bitrate = mirror.get("max_bitrate")
 
         for track_data in serato_tracks:
@@ -123,9 +126,10 @@ class SyncEngine:
                 if t_track:
                     tidal_id = t_track.id
                     self.db.upsert_track(db_path, tidal_id, bitrate=bitrate)
-                    logging.info(f"Mapped: {db_path} -> {tidal_id} ({bitrate}k)")
+                    logging.info(f"\033[92mMapped: {db_path} -> {tidal_id} ({bitrate}k)\033[0m")
                 else:
-                    logging.warning(f"Could not find on Tidal: {artist} - {title}")
+                    logging.warning(f"\033[91mCould not find on Tidal: {artist} - {title}\033[0m")
+                    orphaned_tracks.append(db_path)
             
             if tidal_id:
                 found_on_tidal.append(tidal_id)
@@ -153,11 +157,31 @@ class SyncEngine:
             except Exception as e:
                 if "404" in str(e) or "Not Found" in str(e):
                     logging.warning(f"Playlist {playlist_id} not found on Tidal. Clearing ID and retrying...")
-                    # Update DB to clear the stale ID
                     self.db.add_mirror(crate_path, playlist_id=None)
-                    # The next sync run will re-create it. We could retry now but for safety let's wait for next run or manual trigger.
                 else:
                     logging.error(f"Error updating playlist: {e}")
+
+        # 4. Synchronize Tidal -> Serato (check for new tracks on Tidal)
+        logging.info(f"Checking for new tracks added to Tidal playlist {playlist_name}...")
+        playlist_tracks = self.tidal.get_playlist_tracks(playlist_id)
+        new_from_tidal = 0
+        
+        for pt in playlist_tracks:
+            if not hasattr(pt, 'id'): continue
+            tidal_id = str(pt.id)
+            if tidal_id not in found_on_tidal:
+                logging.info(f"Found new track on Tidal: {pt.name} - {pt.artist.name}")
+                placeholder_path = f"TIDAL_IMPORT:{tidal_id}"
+                
+                self.db.upsert_track(placeholder_path, tidal_id)
+                self.db.update_track_status(placeholder_path, 'pending_download')
+                
+                # Register that it needs to be added to THIS crate
+                self.db.add_pending_crate_addition(tidal_id, crate_path)
+                new_from_tidal += 1
+                
+        if new_from_tidal > 0:
+            logging.info(f"Scheduled {new_from_tidal} new track(s) from Tidal for download.")
 
     def extract_bitrate(self, file_path: Path) -> Optional[int]:
         """Extracts bitrate in kbps using ffprobe."""
@@ -289,12 +313,20 @@ class SyncEngine:
                     # Extract tidal_id from command
                     tidal_id = cmd.split("/track/")[-1].strip('"')
                     
-                    if not target_dir.exists():
-                        target_dir.mkdir(parents=True, exist_ok=True)
+                    is_tidal_import = original_path_str.startswith("TIDAL_IMPORT:")
+                    
+                    if is_tidal_import:
+                        target_dir = download_base_dir
+                    else:
+                        if not target_dir.exists():
+                            target_dir.mkdir(parents=True, exist_ok=True)
                         
                     print(f"\n==================================================")
                     print(f"Recuperando: {original_path_obj.name}")
-                    print(f"Destino: {target_dir}")
+                    if not is_tidal_import:
+                        print(f"Destino: {target_dir}")
+                    else:
+                        print(f"Destino: Descarga directa (Tidal -> Serato)")
                     print(f"==================================================")
                     
                     try:
@@ -319,70 +351,87 @@ class SyncEngine:
                         if new_files:
                             # Assuming one file downloaded per command
                             downloaded_file = download_base_dir / new_files[0]
-                            
-                            # Construct final target path
-                            final_target_filename = original_path_obj.stem + downloaded_file.suffix
-                            final_target_path = target_dir / final_target_filename
-                            
-                            print("🔍 Extrayendo metadata y Serato Cue Points originales...")
-                            markers = MetadataCloner.extract_serato_markers(str(original_path_obj))
-                            
-                            print("💉 Inyectando metadata en el nuevo archivo...")
-                            # It's better to inject metadata from the downloaded location before moving, 
-                            # or after moving. Let's do it after moving to final target so it's not lost.
-                            
-                            # Check if final target exists
-                            if final_target_path.exists():
-                                backup_path = target_dir / f"BACKUP-{final_target_path.name}"
-                                print(f"⚠️  El archivo destino ya existe. Renombrando actual a: {backup_path.name}")
-                                final_target_path.rename(backup_path)
-                            
                             is_upgrade = False
-                            if original_path_obj.exists() and original_path_obj != final_target_path:
-                                backup_path_original = target_dir / f"BACKUP-{original_path_obj.name}"
-                                print(f"⚠️  Renombrando archivo original a: {backup_path_original.name}")
-                                original_path_obj.rename(backup_path_original)
-                                is_upgrade = True
-
-                            # Move downloaded file to final destination
-                            shutil.move(str(downloaded_file), str(final_target_path))
                             
-                            # Inject tags into the new file
-                            if markers:
-                                success = MetadataCloner.inject_serato_markers(markers, str(final_target_path))
-                                if success:
-                                    print("✅ Metadata de Serato clonada exitosamente.")
-                                else:
-                                    print("⚠️  No se pudo inyectar la metadata de Serato.")
+                            if is_tidal_import:
+                                final_target_path = downloaded_file
+                                markers = None
                             else:
-                                print("ℹ️  El archivo original no contenía metadata de Serato detectable.")
+                                # Construct final target path
+                                final_target_filename = original_path_obj.stem + downloaded_file.suffix
+                                final_target_path = target_dir / final_target_filename
+                                
+                                print("🔍 Extrayendo metadata y Serato Cue Points originales...")
+                                markers = MetadataCloner.extract_serato_markers(str(original_path_obj))
+                                
+                                # Check if final target exists
+                                if final_target_path.exists():
+                                    backup_path = target_dir / f"BACKUP-{final_target_path.name}"
+                                    print(f"⚠️  El archivo destino ya existe. Renombrando actual a: {backup_path.name}")
+                                    final_target_path.rename(backup_path)
+                                
+                                if original_path_obj.exists() and original_path_obj != final_target_path:
+                                    backup_path_original = target_dir / f"BACKUP-{original_path_obj.name}"
+                                    print(f"⚠️  Renombrando archivo original a: {backup_path_original.name}")
+                                    original_path_obj.rename(backup_path_original)
+                                    is_upgrade = True
+    
+                                # Move downloaded file to final destination
+                                shutil.move(str(downloaded_file), str(final_target_path))
+                                
+                                # Inject tags into the new file
+                                if markers:
+                                    success = MetadataCloner.inject_serato_markers(markers, str(final_target_path))
+                                    if success:
+                                        print("✅ Metadata de Serato clonada exitosamente.")
+                                    else:
+                                        print("⚠️  No se pudo inyectar la metadata de Serato.")
+                                else:
+                                    print("ℹ️  El archivo original no contenía metadata de Serato detectable.")
                             
                             print("🔄 Actualizando base de datos local y Crates de Serato...")
                             
                             # Call crate update functionality globally
                             config = self._load_config()
                             serato_dir = config.get("settings", {}).get("serato_base_dir", "/Users/jpardo/Downloads/_Serato_")
-                            
-                            if original_path_str != str(final_target_path):
-                                crates_modified = CrateHandler.update_track_path_globally(
-                                    serato_dir, 
-                                    original_path_str, 
-                                    str(final_target_path)
-                                )
-                                print(f"✅ Se actualizaron las referencias en {len(crates_modified)} Crates de Serato:")
-                                for c_name in crates_modified:
-                                    print(f"   - {c_name}")
-                            
-                            if is_upgrade:
-                                # Old file goes to pending_cleanup, keep track of backup location
-                                self.db.update_track_status(original_path_str.lstrip('/'), 'pending_cleanup', str(backup_path_original))
-                                # Register new file as synced
+
+                            if is_tidal_import:
+                                # ADD NEW TRACK TO TARGET CRATES
+                                pending_crates = self.db.get_pending_crate_additions(tidal_id)
+                                for c_path in pending_crates:
+                                    c_handler = CrateHandler(c_path)
+                                    if c_handler.add_track_to_crate(str(final_target_path)):
+                                        print(f"✅ Se añadió el track al Crate: {Path(c_path).name}")
+                                self.db.remove_pending_crate_additions(tidal_id)
+                                
+                                # Clean up placeholder mappings and register real file
+                                self.db.update_track_status(original_path_str, 'synced', str(final_target_path))
                                 self.db.upsert_track(str(final_target_path).lstrip('/'), tidal_id)
                                 self.db.update_track_status(str(final_target_path).lstrip('/'), 'synced', str(final_target_path))
-                            else:
-                                self.db.update_track_status(original_path_str.lstrip('/'), 'synced', str(final_target_path))
                                 
-                            print(f"🎉 Descarga completada -> {final_target_path.name}")
+                                print(f"🎉 Descarga (Tidal -> Serato) completada -> {final_target_path}")
+
+                            else:
+                                if original_path_str != str(final_target_path):
+                                    crates_modified = CrateHandler.update_track_path_globally(
+                                        serato_dir, 
+                                        original_path_str, 
+                                        str(final_target_path)
+                                    )
+                                    print(f"✅ Se actualizaron las referencias en {len(crates_modified)} Crates de Serato:")
+                                    for c_name in crates_modified:
+                                        print(f"   - {c_name}")
+                                
+                                if is_upgrade:
+                                    # Old file goes to pending_cleanup, keep track of backup location
+                                    self.db.update_track_status(original_path_str.lstrip('/'), 'pending_cleanup', str(backup_path_original))
+                                    # Register new file as synced
+                                    self.db.upsert_track(str(final_target_path).lstrip('/'), tidal_id)
+                                    self.db.update_track_status(str(final_target_path).lstrip('/'), 'synced', str(final_target_path))
+                                else:
+                                    self.db.update_track_status(original_path_str.lstrip('/'), 'synced', str(final_target_path))
+                                    
+                                print(f"🎉 Descarga completada -> {final_target_path.name}")
                             
                         else:
                             print("ℹ️  No se detectó ningún archivo NUEVO en la ruta temporal.")

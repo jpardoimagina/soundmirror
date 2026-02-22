@@ -39,6 +39,11 @@ def main():
     sync_parser = subparsers.add_parser("sync", help="Ejecuta la sincronización")
     sync_parser.add_argument("--max-bitrate", type=int, help="Solo sincroniza canciones locales con bitrate menor o igual a este valor (kbps)")
     sync_parser.add_argument("--force-update", action="store_true", help="Fuerza pending_download en canciones existentes que cumplan el filtro de bitrate")
+    sync_parser.add_argument("--orphan-crate", type=str, help="Nombre del crate para almacenar los tracks que no se encuentren en Tidal")
+
+    # Command: compare
+    compare_parser = subparsers.add_parser("compare", help="Compara un crate con su playlist de Tidal (diferencias)")
+    compare_parser.add_argument("index", type=int, help="Índice del crate (obtenido con 'list')")
 
     # Command: recover
     recover_parser = subparsers.add_parser("recover", help="Ejecuta la descarga de archivos faltantes")
@@ -60,6 +65,11 @@ def main():
 
     # Command: clear-tracks
     clear_tracks_parser = subparsers.add_parser("clear-tracks", help="Elimina TODOS los tracks locales de la lista de seguimiento (vacía la caché)")
+
+    # Command: daemon
+    daemon_parser = subparsers.add_parser("daemon", help="Ejecuta la sincronización en bucle infinito (Sync + Recover)")
+    daemon_parser.add_argument("--interval", type=int, default=15, help="Intervalo en minutos (por defecto 15)")
+    daemon_parser.add_argument("--orphan-crate", type=str, help="Nombre del crate para almacenar los tracks que no se encuentren en Tidal")
 
     args = parser.parse_args()
 
@@ -145,10 +155,88 @@ def main():
         else:
             print("Índice fuera de rango.")
 
+    elif args.command == "compare":
+        mirrors = db.get_mirrors()
+        if 0 <= args.index < len(mirrors):
+            crate_path_str, tidal_playlist_id, direction, is_active, name = mirrors[args.index]
+            if not is_active:
+                print(f"❌ El crate '{name}' está marcado como INACTIVO. No se puede comparar.")
+                sys.exit(1)
+            if not tidal_playlist_id:
+                print(f"❌ El crate '{name}' no tiene una playlist de Tidal asignada.")
+                sys.exit(1)
+            
+            print(f"🔍 Comparando Crate: {name} con Playlist Tidal: {tidal_playlist_id}")
+            
+            try:
+                crate_handler = CrateHandler(crate_path_str)
+                serato_tracks = crate_handler.get_tracks()
+            except Exception as e:
+                print(f"❌ Error leyendo el crate: {e}")
+                sys.exit(1)
+            
+            crate_tidal_ids = {}
+            unmapped_local = []
+            
+            for track in serato_tracks:
+                local_path = track['path']
+                info = db.get_track_info(local_path)
+                if info and info.get('tidal_id'):
+                    crate_tidal_ids[str(info['tidal_id'])] = local_path
+                else:
+                    unmapped_local.append(local_path)
+                    
+            try:
+                engine = SyncEngine()
+                tidal_tracks = engine.tidal.get_playlist_tracks(tidal_playlist_id)
+            except Exception as e:
+                print(f"❌ Error leyendo la playlist de Tidal: {e}")
+                sys.exit(1)
+                
+            tidal_ids = {str(track.id): track for track in tidal_tracks}
+            
+            missing_in_tidal = []
+            missing_in_crate = []
+            
+            for tid, local_path in crate_tidal_ids.items():
+                if tid not in tidal_ids:
+                    missing_in_tidal.append((tid, local_path))
+                    
+            for tid, track in tidal_ids.items():
+                if tid not in crate_tidal_ids:
+                    missing_in_crate.append(track)
+                    
+            print("\n" + "="*60)
+            print(f"📊 RESULTADOS DE LA COMPARACIÓN: {name}")
+            print("="*60)
+            print(f"🎵 Tracks en Crate local : {len(serato_tracks)}")
+            print(f"🎵 Tracks en Playlist Tidal: {len(tidal_tracks)}")
+            print("-" * 60)
+            
+            if not missing_in_tidal and not unmapped_local and not missing_in_crate:
+                print("✅ ¡El Crate y la Playlist están PERFECTAMENTE SINCRONIZADOS!")
+            else:
+                if missing_in_tidal or unmapped_local:
+                    print(f"\n❌ FALTAN EN TIDAL (Total: {len(missing_in_tidal) + len(unmapped_local)}):")
+                    for tid, path in missing_in_tidal:
+                        print(f"   - [Eliminado en Tidal?] {Path(path).name}")
+                    for path in unmapped_local:
+                        print(f"   - [No Mapeado/Local]    {Path(path).name}")
+                
+                if missing_in_crate:
+                    print(f"\n❌ FALTAN EN EL CRATE (Total: {len(missing_in_crate)}):")
+                    for track in missing_in_crate:
+                        artist_name = track.artist.name if hasattr(track, 'artist') and track.artist else "Unknown Artist"
+                        print(f"   - {artist_name} - {track.name}")
+            print("="*60 + "\n")
+        else:
+            print("❌ Índice fuera de rango.")
+
     elif args.command == "sync":
         engine = SyncEngine()
         force_update = getattr(args, 'force_update', False)
-        engine.run_sync(max_bitrate=args.max_bitrate, force_update=force_update)
+        orphan_crate = getattr(args, 'orphan_crate', None)
+        engine.run_sync(max_bitrate=args.max_bitrate, force_update=force_update, orphan_crate=orphan_crate)
 
     elif args.command == "recover":
         # Handle temp_dir from config or save new one
@@ -230,7 +318,7 @@ def main():
                 print(f"\n✅ Limpieza completada. {deleted} archivos/registros eliminados.")
 
     elif args.command == "clear-tracks":
-        print("⚠️  ¡ATENCIÓN! Esto eliminará el registro de TODOS los tracks sincronizados en la base de datos local.")
+        print("⚠️  ¡ATENCIÓN! Esto eliminara el registro de TODOS los tracks sincronizados en la base de datos local.")
         print("    Tendrás que volver a ejecutar 'sync' para que soundmirror escanee Serato de nuevo.")
         confirm = input("¿Estás seguro de querer vaciar la lista de tracks? (s/N): ")
         if confirm.lower() == 's':
@@ -242,6 +330,42 @@ def main():
                 print(f"🗑️  ¡Lista vaciada! (Se han eliminado {deleted} registros de seguimiento).")
         else:
             print("❌ Operación cancelada.")
+
+    elif args.command == "daemon":
+        import time
+        from datetime import datetime
+        print(f"🚀 Iniciando daemon de sincronización (Intervalo: {args.interval} minutos)")
+        while True:
+            try:
+                print(f"\n--- [ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ] ---")
+                engine = SyncEngine()
+                
+                print("🔄 Ejecutando Sync...")
+                orphan_crate = getattr(args, 'orphan_crate', None)
+                engine.run_sync(max_bitrate=args.max_bitrate if hasattr(args, 'max_bitrate') else None, force_update=False, orphan_crate=orphan_crate)
+                
+                print("⏬ Ejecutando Recover (Calidad: LOSSLESS)...")
+                config_path = Path("mirrors.json")
+                temp_dir = None
+                if config_path.exists():
+                    try:
+                        with open(config_path, 'r') as f:
+                            cfg = json.load(f)
+                        temp_dir = cfg.get("settings", {}).get("temp_dir")
+                    except Exception:
+                        pass
+                
+                engine.run_recovery(dry_run=False, quality="LOSSLESS", temp_dir=temp_dir)
+                
+                print(f"💤 Esperando {args.interval} minutos para la próxima ejecución...")
+                time.sleep(args.interval * 60)
+            except KeyboardInterrupt:
+                print("\n🛑 Daemon detenido por el usuario.")
+                break
+            except Exception as e:
+                print(f"❌ Error crítico en el daemon: {e}")
+                print(f"🔄 Reintentando en {args.interval} minutos...")
+                time.sleep(args.interval * 60)
 
     else:
         parser.print_help()

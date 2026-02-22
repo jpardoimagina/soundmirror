@@ -123,6 +123,41 @@ class CrateHandler:
             
         return False
 
+    def add_track_to_crate(self, new_path: str) -> bool:
+        """Appends a new track to the end of the crate file."""
+        if not self.crate_path.exists():
+            # Create a basic Serato crate with version block
+            try:
+                vrsn_str = '1.0/Serato ScratchLive Crate'
+                vrsn_val = vrsn_str.encode('utf-16-be')
+                vrsn_block = b'vrsn' + struct.pack('>I', len(vrsn_val)) + vrsn_val
+                self.crate_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(self.crate_path, 'wb') as f:
+                    f.write(vrsn_block)
+            except Exception as e:
+                print(f"Error creating new crate {self.crate_path.name}: {e}")
+                return False
+
+        try:
+            # Prepare new otrk block
+            # Format: 'otrk' + length + 'ptrk' + length + value
+            norm_new_path = new_path.lstrip('/')
+            ptrk_val = norm_new_path.encode('utf-16-be')
+            ptrk_len = len(ptrk_val)
+            
+            ptrk_block = b'ptrk' + struct.pack('>I', ptrk_len) + ptrk_val
+            
+            otrk_len = len(ptrk_block)
+            otrk_block = b'otrk' + struct.pack('>I', otrk_len) + ptrk_block
+            
+            with open(self.crate_path, 'ab') as f:
+                f.write(otrk_block)
+                
+            return True
+        except Exception as e:
+            print(f"Error adding track to crate {self.crate_path.name}: {e}")
+            return False
+
     @staticmethod
     def list_all_crates(serato_dir: str) -> List[Path]:
         """

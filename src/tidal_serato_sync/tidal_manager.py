@@ -198,6 +198,17 @@ class TidalManager:
         except Exception:
             return None
 
+    def get_playlist_tracks(self, playlist_id: str) -> List[tidalapi.Track]:
+        """Gets all tracks from a playlist."""
+        try:
+            playlist = self.get_playlist(playlist_id)
+            if playlist:
+                return playlist.tracks()
+            return []
+        except Exception as e:
+            print(f"Error getting tracks for playlist {playlist_id}: {e}")
+            return []
+
     def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]):
         """
         Adds tracks to a playlist by ID.

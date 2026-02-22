@@ -14,7 +14,7 @@
 - Incluye ejemplos de uso cuando sea apropiado
 - Explica el "por qué" en los comentarios, no solo el "qué"
 - Mantén la documentación actualizada con los cambios de código
-- EL directorio para TODA la docuentación es /docs
+- EL directorio para TODA la docuentación es `/docs`
 
 ## Mejores Prácticas
 
@@ -36,6 +36,7 @@
 - No incluyas credenciales, claves API o información sensible en el código
 - Utiliza variables de entorno para configuración sensible
 - Implementa autenticación y autorización adecuadas
+- **IMPORTANTE:** Nunca incluir tokens de Tidal o credenciales en el repositorio. Archivos como `.tidal_token.json` deben estar en `.gitignore`.
 
 ## Performance
 
@@ -55,14 +56,14 @@
 - Agrupa cambios relacionados en commits lógicos
 - Mantén los commits atómicos y enfocados
 
-## Entorno de Desarrollo
+## Entorno de Desarrollo y Despliegue
 
-- Usar **pyenv** para gestionar versiones de Python
+- Usar **pyenv** para gestionar versiones de Python (3.11+ requerido)
 - Usar **pyenv-virtualenv** para entornos virtuales
-- Python 3.11+ requerido
 - Archivo `.python-version` en la raíz define la versión del proyecto
-
-
+- **Paquetización:** El proyecto utiliza `setuptools` y puede instalarse en modo editable (`pip install -e .`).
+- **Entry Point:** El comando principal es `soundmirror`.
+- **Dependencias Externas:** `tidal-dl-ng` requiere instalación manual en un entorno separado si no está disponible en PyPI para la versión de Python del proyecto.
 
 ### Convenciones de Nombres
 
@@ -71,9 +72,15 @@
 - Funciones y métodos: snake_case (ej: `get_page`, `scrape_data`)
 - Constantes: UPPER_SNAKE_CASE (ej: `DEFAULT_WAIT`)
 - Variables de entorno: UPPER_SNAKE_CASE (ej: `HEADLESS`, `LOG_LEVEL`)
+- **Paquete:** El paquete principal es `tidal_serato_sync` (ubicado en `src/tidal_serato_sync`).
 
-### versionado
+### Versionado
 
 - Cada vez que se realice un cambio en el codigo que implica no preservar la compatibilidad con versiones anteriores, se debe actualizar el número de versión en el archivo 'pyproject.toml' siguiendo el formato `MAJOR.MINOR.PATCH` (ej: `1.0.0` → `2.0.0`). En cconcreto se debe actualizar el número de versión mayor (MAJOR) para indicar que se han introducido cambios incompatibles con versiones anteriores.
 - Cada vez que se realice un cambio en el código que preserve la compatibilidad con versiones anteriores pero añada nuevas funcionalidades, se debe actualizar el número de versión en el archivo 'pyproject.toml' siguiendo el formato `MAJOR.MINOR.PATCH` (ej: `1.0.0` → `1.1.0`). En concreto se debe actualizar el número de versión menor (MINOR) para indicar que se han añadido nuevas funcionalidades sin romper la compatibilidad con versiones anteriores.
 - Cada vez que se realice un cambio en el código que preserve la compatibilidad con versiones anteriores pero corrija errores o realice mejoras menores, se debe actualizar el número de versión en el archivo 'pyproject.toml' siguiendo el formato `MAJOR.MINOR.PATCH` (ej: `1.0.0` → `1.0.1`). En concreto se debe actualizar el número de versión de parche (PATCH) para indicar que se han corregido errores o realizado mejoras menores sin romper la compatibilidad con versiones anteriores.
+
+## Historial de Cambios Importantes
+
+- **v1.0.0:** Lanzamiento inicial con sincronización bidireccional, recuperación de descargas, filtro de bitrate y comando `soundmirror`.
+

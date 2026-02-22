@@ -39,6 +39,16 @@ class DatabaseManager:
                 )
             """)
             
+            # Table for tracking Tidal-originated tracks pending Crate assignment
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pending_crate_additions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tidal_id TEXT,
+                    crate_path TEXT,
+                    UNIQUE(tidal_id, crate_path)
+                )
+            """)
+            
             # Migration check: ensure crate_path exists in mirror_config
             cursor.execute("PRAGMA table_info(mirror_config)")
             columns = [info[1] for info in cursor.fetchall()]
@@ -145,3 +155,27 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute(query)
             return cursor.fetchall()
+            
+    def add_pending_crate_addition(self, tidal_id: str, crate_path: str):
+        """Records a new Tidal track that needs to be added to a Crate once downloaded."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR IGNORE INTO pending_crate_additions (tidal_id, crate_path)
+                VALUES (?, ?)
+            """, (tidal_id, str(crate_path)))
+            conn.commit()
+            
+    def get_pending_crate_additions(self, tidal_id: str) -> list[str]:
+        """Returns the list of crate paths that are waiting for this Tidal track."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT crate_path FROM pending_crate_additions WHERE tidal_id = ?", (tidal_id,))
+            return [row[0] for row in cursor.fetchall()]
+            
+    def remove_pending_crate_additions(self, tidal_id: str):
+        """Clears all pending crate additions for a specific Tidal track once applied."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM pending_crate_additions WHERE tidal_id = ?", (tidal_id,))
+            conn.commit()
