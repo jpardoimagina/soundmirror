@@ -95,7 +95,8 @@ class MetadataCloner:
                                     # Playcount is usually base64 e.g. 'MTgAC' -> '18'
                                     import re
                                     b64_str = re.sub(b'[^A-Za-z0-9+/]', b'', val_bytes)
-                                    b64_str += b'=' * (-len(b64_str) % 4)
+                                    # Fix invalid base64 lengths (e.g. MTgAC is 5 chars, round down to nearest 4)
+                                    b64_str = b64_str[:len(b64_str) - (len(b64_str) % 4)]
                                     raw = base64.b64decode(b64_str)
                                     # Strip null bytes and just keep numeric string
                                     tags_extracted[desc_mapped] = raw.split(b'\x00')[0]
@@ -104,7 +105,7 @@ class MetadataCloner:
                                     # We decode them to raw binary (with wrapper intact)
                                     import re
                                     b64_str = re.sub(b'[^A-Za-z0-9+/]', b'', val_bytes)
-                                    b64_str += b'=' * (-len(b64_str) % 4)
+                                    b64_str = b64_str[:len(b64_str) - (len(b64_str) % 4)]
                                     raw = base64.b64decode(b64_str)
                                     # Store exactly as decoded, FLAC will re-base64 encode it and Serato will rejoice
                                     tags_extracted[desc_mapped] = raw
@@ -151,16 +152,24 @@ class MetadataCloner:
                         mapping = {'TKEY':'key', 'TBPM':'bpm', 'TCOM':'composer', 'TIT1':'grouping', 'COMM':'comment', 'TCON':'genre', 'TPUB':'label'}
                         audio.tags[mapping[desc]] = data.decode('utf-8', errors='ignore')
                     elif "serato" in desc.lower():
+                        if desc == "Serato Markers_": continue
+                        
                         # Explicit Vorbis Serato keys: 
-                        # 'Serato VidAssoc' -> 'serato_videoassociation', 'Serato Markers_' -> 'serato_markers_', etc.
+                        # 'Serato VidAssoc' -> 'serato_videoassociation', 'Serato Markers2' -> 'serato_markers_v2', etc.
                         if desc == "Serato VidAssoc": safe_key = "serato_videoassociation"
                         elif desc == "Serato RelVolAd": safe_key = "serato_relvol"
                         elif desc == "Serato Playcount": safe_key = "serato_playcount"
                         elif desc == "Serato Autotags": safe_key = "serato_autotags"
-                        elif desc == "Serato Markers2": safe_key = "serato_markers2"
+                        elif desc == "Serato Markers2": safe_key = "serato_markers_v2"
+                        elif desc == "Serato BeatGrid": safe_key = "serato_beatgrid"
+                        elif desc == "Serato Overview": safe_key = "serato_overview"
+                        elif desc == "Serato Analysis": safe_key = "serato_analysis"
                         else: safe_key = desc.replace(' ', '_').lower()
                         b64_data = base64.b64encode(data).decode('ascii')
                         audio.tags[safe_key] = b64_data
+                        
+                        if safe_key == "serato_markers_v2":
+                            audio.tags["serato_markers2"] = b64_data
                         
                 audio.save()
                 return True
