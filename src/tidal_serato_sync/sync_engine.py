@@ -129,6 +129,15 @@ class SyncEngine:
                 
                 logging.info(f"Searching Tidal for: {title} by {artist}")
                 t_track = self.tidal.search_track(title, artist)
+                
+                if not t_track:
+                    # Retry with cleaned artist/title
+                    clean_title = self._clean_search_term(title)
+                    clean_artist = self._clean_search_term(artist)
+                    if clean_title != title or clean_artist != artist:
+                        logging.info(f"Retrying search with cleaned terms: {clean_title} by {clean_artist}")
+                        t_track = self.tidal.search_track(clean_title, clean_artist)
+
                 if t_track:
                     tidal_id = t_track.id
                     self.db.upsert_track(db_path, tidal_id, bitrate=bitrate)
@@ -225,6 +234,33 @@ class SyncEngine:
             return 900
             
         return None
+
+    def _clean_search_term(self, text: str) -> str:
+        """Removes common dirty characters/tags from track or artist names to improve search matches."""
+        if not text:
+            return text
+            
+        import re
+        # Remove bitrates e.g. 320Kbps, 192 Kbps, 320Kbs
+        text = re.sub(r'\b\d{3}\s*[Kk]bps?\b', '', text, flags=re.IGNORECASE)
+        # Remove video/promo tags
+        text = re.sub(r'\(?Official(?: Music)? Video\)?', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\(?Lyric video\)?', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\(?video clip\)?', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\[?HQ(?: - Exclusive)?\]?', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bHD\s*1080p\b', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\[?OUT NOW!?\]?', '', text, flags=re.IGNORECASE)
+        # Remove years in parentheses or brackets e.g. (1992), [1999]
+        text = re.sub(r'[\(\[]\d{4}[\]\)]', '', text)
+        # Remove track number prefixes like "01 " or "15 - "
+        text = re.sub(r'^\d{2}\s*-?\s*', '', text)
+        # Remove code prefixes like "A-TP-", "C-S-", "AA-PR-"
+        text = re.sub(r'^[A-Za-z]{1,2}-[A-Za-z]{1,2}-\s*', '', text)
+        
+        # Clean up any leftover double spaces, dangling hyphens at the end
+        text = re.sub(r'\s+', ' ', text)
+        text = re.sub(r'\s+-\s*$', '', text)
+        return text.strip()
 
     def get_recovery_commands(self) -> List[str]:
         """Generates a list of shell commands to download missing tracks using tidal-dl-ng."""
