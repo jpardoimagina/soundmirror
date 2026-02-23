@@ -241,6 +241,13 @@ class SyncEngine:
             return text
             
         import re
+        # Remove Youtube ID format at the end (e.g. -6kzXyhqtKuE)
+        text = re.sub(r'-[a-zA-Z0-9_\-]{11}$', '', text)
+        # Remove any bracketed text [like this]
+        text = re.sub(r'\[.*?\]', '', text)
+        # Remove standalone Out Now!
+        text = re.sub(r'(?i)\bout now!?\b', '', text)
+
         # Remove bitrates e.g. 320Kbps, 192 Kbps, 320Kbs
         text = re.sub(r'\b\d{3}\s*[Kk]bps?\b', '', text, flags=re.IGNORECASE)
         # Remove video/promo tags
