@@ -385,7 +385,8 @@ def main():
 
         print(f"🔧 Iniciando Google Drive Sync...")
         try:
-            manager = DriveSyncManager()
+            credentials_path = config.get("settings", {}).get("drive_credentials_path")
+            manager = DriveSyncManager(credentials_path=credentials_path)
         except Exception as e:
             print(f"❌ Error al conectar con Google Drive: {e}")
             sys.exit(1)

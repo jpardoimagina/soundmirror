@@ -1,0 +1,11 @@
+{
+  "settings": {
+    "serato_base_dir": "/Users/jpardo/Music/_Serato_",
+    "download_folder": "/Users/jpardo/Music",
+    "tidal_base_folder": "RATON_ESPEJO",
+    "temp_dir": "/Users/jpardo/Music/TidalTemp",
+    "drive_sync_source": "/Users/jpardo/Music",
+    "drive_sync_dest": "/Volumes/GoogleDrive/Mi unidad/Musica",
+    "drive_credentials_path": "src/tidal_serato_sync/credentials.json"
+  }
+}
