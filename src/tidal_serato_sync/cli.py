@@ -378,6 +378,10 @@ def main():
         
         source = args.source or config.get("settings", {}).get("drive_sync_source")
         dest_folder_name = args.dest or config.get("settings", {}).get("drive_sync_dest")
+        
+        # Si el usuario puso una ruta (ej: /Volumes/.../Musica), nos quedamos solo con el nombre de la carpeta final
+        if dest_folder_name and ("/" in dest_folder_name or "\\" in dest_folder_name):
+            dest_folder_name = Path(dest_folder_name).name
 
         if not source or not dest_folder_name:
             print("❌ Error: Especifica origen y destino o defínelos en mirrors.json.")
