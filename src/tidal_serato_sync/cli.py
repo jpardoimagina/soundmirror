@@ -71,6 +71,12 @@ def main():
     daemon_parser.add_argument("--interval", type=int, default=15, help="Intervalo en minutos (por defecto 15)")
     daemon_parser.add_argument("--orphan-crate", type=str, help="Nombre del crate para almacenar los tracks que no se encuentren en Tidal")
 
+    # Command: googleupload
+    googleupload_parser = subparsers.add_parser("googleupload", help="Sincroniza carpetas locales con Google Drive")
+    googleupload_parser.add_argument("--source", help="Ruta local a sincronizar")
+    googleupload_parser.add_argument("--dest", help="Nombre de la carpeta de destino en Google Drive")
+    googleupload_parser.add_argument("--exclude", action='append', help="Patrón a excluir (ej: *.crate, _Serato_)")
+
     args = parser.parse_args()
 
     # Load configuration
@@ -366,6 +372,39 @@ def main():
                 print(f"❌ Error crítico en el daemon: {e}")
                 print(f"🔄 Reintentando en {args.interval} minutos...")
                 time.sleep(args.interval * 60)
+
+    elif args.command == "googleupload":
+        from .drive_sync_manager import DriveSyncManager
+        
+        source = args.source or config.get("settings", {}).get("drive_sync_source")
+        dest_folder_name = args.dest or config.get("settings", {}).get("drive_sync_dest")
+
+        if not source or not dest_folder_name:
+            print("❌ Error: Especifica origen y destino o defínelos en mirrors.json.")
+            sys.exit(1)
+
+        print(f"🔧 Iniciando Google Drive Sync...")
+        try:
+            manager = DriveSyncManager()
+        except Exception as e:
+            print(f"❌ Error al conectar con Google Drive: {e}")
+            sys.exit(1)
+
+        print(f"📁 Buscando/Creando carpeta de destino: {dest_folder_name}")
+        dest_id = manager.get_or_create_folder(dest_folder_name)
+        
+        excludes = args.exclude if args.exclude else ["*.crate", "_Serato_", "*.bak", ".DS_Store"]
+        
+        print(f"🚀 Iniciando sincronización recursiva...")
+        print(f"📂 Origen: {source}")
+        print(f"🚫 Exclusiones: {', '.join(excludes)}")
+        
+        try:
+            manager.sync_folder_recursive(source, dest_id, excludes=excludes)
+            print("\n✅ ¡Sincronización finalizada!")
+        except Exception as e:
+            print(f"\n❌ Error durante la sincronización: {e}")
+            sys.exit(1)
 
     else:
         parser.print_help()

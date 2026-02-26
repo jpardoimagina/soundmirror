@@ -61,3 +61,7 @@ mirrors.json
 
 # Logs
 *.log
+
+# Google Drive API
+credentials.json
+token.json

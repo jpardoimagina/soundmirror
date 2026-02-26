@@ -28,6 +28,9 @@ dependencies = [
     "tidalapi>=0.8.0",
     "python-dotenv>=1.0.0",
     "mutagen",
+    "google-api-python-client",
+    "google-auth-httplib2",
+    "google-auth-oauthlib",
 ]
 
 [project.optional-dependencies]
