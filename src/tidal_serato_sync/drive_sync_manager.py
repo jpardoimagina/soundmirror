@@ -95,7 +95,7 @@ class DriveSyncManager:
         media = MediaFileUpload(local_path, resumable=True)
         self.service.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
-    def sync_folder_recursive(self, local_dir, drive_parent_id, excludes=None):
+    def sync_folder_recursive(self, local_dir, drive_parent_id, excludes=None, allowed_extensions=None):
         """Sincroniza recursivamente una carpeta local con Drive."""
         if excludes is None:
             excludes = ["*.crate", "_Serato_", "*.bak", ".DS_Store"]
@@ -114,8 +114,15 @@ class DriveSyncManager:
                 continue
 
             if item.is_file():
+                # Filter by extension if allowed_extensions is provided
+                if allowed_extensions:
+                    # item.suffix includes the dot, e.g., '.mp3'
+                    ext = item.suffix.lower().lstrip('.')
+                    if ext not in [e.lower() for e in allowed_extensions]:
+                        continue
+                
                 self.upload_file(str(item), drive_parent_id)
             elif item.is_dir():
                 # Crear carpeta en Drive y seguir recursivamente
                 subfolder_id = self.get_or_create_folder(item.name, drive_parent_id)
-                self.sync_folder_recursive(item, subfolder_id, excludes)
+                self.sync_folder_recursive(item, subfolder_id, excludes, allowed_extensions)

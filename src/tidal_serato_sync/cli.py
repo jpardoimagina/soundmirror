@@ -395,13 +395,15 @@ def main():
         dest_id = manager.get_or_create_folder(dest_folder_name)
         
         excludes = args.exclude if args.exclude else ["*.crate", "_Serato_", "*.bak", ".DS_Store"]
+        allowed_extensions = config.get("settings", {}).get("drive_allowed_extensions", ["mp3", "mp4", "flac", "3tc"])
         
         print(f"🚀 Iniciando sincronización recursiva...")
         print(f"📂 Origen: {source}")
         print(f"🚫 Exclusiones: {', '.join(excludes)}")
+        print(f"🎵 Extensiones permitidas: {', '.join(allowed_extensions)}")
         
         try:
-            manager.sync_folder_recursive(source, dest_id, excludes=excludes)
+            manager.sync_folder_recursive(source, dest_id, excludes=excludes, allowed_extensions=allowed_extensions)
             print("\n✅ ¡Sincronización finalizada!")
         except Exception as e:
             print(f"\n❌ Error durante la sincronización: {e}")
