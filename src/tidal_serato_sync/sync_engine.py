@@ -144,11 +144,21 @@ class SyncEngine:
 
                 if t_track:
                     tidal_id = str(t_track.id)
-                    self.db.upsert_track(db_path, tidal_id, bitrate=bitrate)
+                    display_name = f"{t_track.artist.name} - {t_track.name}"
+                    self.db.upsert_track(db_path, tidal_id, bitrate=bitrate, display_name=display_name)
                     logging.info(f"\033[92mMapped: {db_path} -> {tidal_id} ({bitrate}k)\033[0m")
                 else:
                     logging.warning(f"\033[91mCould not find on Tidal: {artist} - {title}\033[0m")
                     orphaned_tracks.append(db_path)
+            else:
+                # Even if we have tidal_id, we might want to ensure display_name is set for future recovery
+                if not track_info.get('display_name'):
+                    try:
+                        t_track = self.tidal.session.track(tidal_id)
+                        display_name = f"{t_track.artist.name} - {t_track.name}"
+                        self.db.upsert_track(db_path, tidal_id, bitrate=bitrate, display_name=display_name)
+                    except Exception:
+                        pass
             
             if tidal_id:
                 found_on_tidal.append(tidal_id)
@@ -399,22 +409,28 @@ class SyncEngine:
                         track_info = self.db.get_track_info(original_path_str.lstrip('/'))
                         display_name = track_info.get('display_name') if track_info else None
                         
+                        # If display_name is missing, try to fetch it from Tidal to help matching
+                        if not display_name and tidal_id and self.tidal.authenticate():
+                            try:
+                                t_track = self.tidal.session.track(tidal_id)
+                                display_name = f"{t_track.artist.name} - {t_track.name}"
+                                # Cache it for next time
+                                self.db.upsert_track(original_path_str.lstrip('/'), tidal_id, display_name=display_name)
+                            except Exception:
+                                pass
+
                         print(f"DEBUG: Buscando archivo para: {original_path_obj.name}")
-                        print(f"DEBUG: Display Name en DB: {display_name}")
-                        print(f"DEBUG: Carpeta de búsqueda: {download_base_dir}")
+                        print(f"DEBUG: Display Name: {display_name}")
                         
                         found_file = None
                         # Try to find an existing file that matches
                         potential_files = list(download_base_dir.rglob("*"))
-                        print(f"DEBUG: Encontrados {len(potential_files)} archivos/carpetas en el temporal.")
                         
                         for f in potential_files:
                             if f.is_file() and f.suffix.lower() in allowed_exts and not f.name.startswith('.'):
-                                # print(f"DEBUG: Comparando con: {f.name}")
                                 # Matching logic:
                                 # 1. Exact stem match with original
                                 if f.stem.lower() == original_path_obj.stem.lower():
-                                    print(f"DEBUG: Match por stem exacto: {f.name}")
                                     found_file = f
                                     break
                                 
@@ -425,13 +441,21 @@ class SyncEngine:
                                     
                                     # Si el nombre del archivo contiene gran parte del display name o viceversa
                                     if clean_dname in clean_fname or clean_fname in clean_dname:
-                                        print(f"DEBUG: Match por display_name: {f.name} <-> {display_name}")
                                         found_file = f
                                         break
+                                    
+                                    # Fuzzy check: artist and title parts
+                                    if " - " in display_name:
+                                        d_artist, d_title = display_name.lower().split(" - ", 1)
+                                        clean_d_artist = self._clean_search_term(d_artist)
+                                        clean_d_title = self._clean_search_term(d_title)
                                         
-                                # 3. Match por ID de Tidal si está en el nombre (algunos templates lo incluyen)
+                                        if clean_d_title in clean_fname and (not clean_d_artist or clean_d_artist in clean_fname):
+                                            found_file = f
+                                            break
+
+                                # 3. Match por Tidal ID en nombre
                                 if tidal_id in f.name:
-                                    print(f"DEBUG: Match por Tidal ID en nombre: {f.name}")
                                     found_file = f
                                     break
                         
