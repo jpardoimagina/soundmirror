@@ -8,17 +8,21 @@ from .db_manager import DatabaseManager
 from .sync_engine import SyncEngine
 
 def list_serato_crates(db, serato_dir, only_active: bool = False):
-    mirrors = db.get_mirrors(only_active=only_active)
+    mirrors = db.get_mirrors(only_active=False)  # Always get all to maintain indices
     if not mirrors:
-        if only_active:
-            print("No hay crates activos registrados.")
-        else:
-            print("No se han descubierto crates. Ejecuta 'python src/cli.py discover' primero.")
+        print("No se han descubierto crates. Ejecuta 'python src/cli.py discover' primero.")
         return []
     
+    # Check if there are any mirrors to show if filtering
+    if only_active and not any(m[3] for m in mirrors):
+        print("No hay crates activos registrados.")
+        return mirrors
+
     title = "Crates activos en la base de datos:" if only_active else "Crates en la base de datos:"
     print(f"\n{title}")
     for i, (path, tid, dir, active, name) in enumerate(mirrors):
+        if only_active and not active:
+            continue
         status = "[ACTIVO]" if active else "[INACTIVO]"
         print(f"[{i}] {status} {name}")
     return mirrors
