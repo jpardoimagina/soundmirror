@@ -7,13 +7,17 @@ from .crate_handler import CrateHandler
 from .db_manager import DatabaseManager
 from .sync_engine import SyncEngine
 
-def list_serato_crates(db, serato_dir):
-    mirrors = db.get_mirrors()
+def list_serato_crates(db, serato_dir, only_active: bool = False):
+    mirrors = db.get_mirrors(only_active=only_active)
     if not mirrors:
-        print("No se han descubierto crates. Ejecuta 'python src/cli.py discover' primero.")
+        if only_active:
+            print("No hay crates activos registrados.")
+        else:
+            print("No se han descubierto crates. Ejecuta 'python src/cli.py discover' primero.")
         return []
     
-    print("\nCrates en la base de datos:")
+    title = "Crates activos en la base de datos:" if only_active else "Crates en la base de datos:"
+    print(f"\n{title}")
     for i, (path, tid, dir, active, name) in enumerate(mirrors):
         status = "[ACTIVO]" if active else "[INACTIVO]"
         print(f"[{i}] {status} {name}")
@@ -24,7 +28,8 @@ def main():
     subparsers = parser.add_subparsers(dest="command")
 
     # Command: list
-    subparsers.add_parser("list", help="Lista los crates registrados en la DB")
+    list_parser = subparsers.add_parser("list", help="Lista los crates registrados en la DB")
+    list_parser.add_argument("--active", action="store_true", help="Muestra solo los crates activos")
 
     # Command: discover
     discover_parser = subparsers.add_parser("discover", help="Escanea y registra todos los crates de Serato")
@@ -74,6 +79,9 @@ def main():
     # Command: clear-tracks
     clear_tracks_parser = subparsers.add_parser("clear-tracks", help="Elimina TODOS los tracks locales de la lista de seguimiento (vacía la caché)")
 
+    # Command: clear-track-mapping
+    subparsers.add_parser("clear-track-mapping", help="Elimina TODOS los registros de mapeo de tracks de la base de datos")
+
     # Command: daemon
     daemon_parser = subparsers.add_parser("daemon", help="Ejecuta la sincronización en bucle infinito (Sync + Recover)")
     daemon_parser.add_argument("--interval", type=int, default=15, help="Intervalo en minutos (por defecto 15)")
@@ -117,7 +125,7 @@ def main():
     db = DatabaseManager()
 
     if args.command == "list":
-        list_serato_crates(db, serato_dir)
+        list_serato_crates(db, serato_dir, only_active=args.active)
 
     elif args.command == "discover":
         if not serato_path_obj.exists():
@@ -408,6 +416,16 @@ def main():
                 deleted = cursor.rowcount
                 conn.commit()
                 print(f"🗑️  ¡Lista vaciada! (Se han eliminado {deleted} registros de seguimiento).")
+        else:
+            print("❌ Operación cancelada.")
+
+    elif args.command == "clear-track-mapping":
+        print("⚠️  ¡ATENCIÓN! Esto eliminará el mapeo de TODOS los tracks de la base de datos.")
+        print("    Esto forzará a que soundmirror tenga que buscar de nuevo cada canción en Tidal.")
+        confirm = input("¿Estás seguro de querer borrar todos los mapeos de tracks? (s/N): ")
+        if confirm.lower() == 's':
+            db.clear_all_track_mappings()
+            print("🗑️  Mapeos de tracks eliminados correctamente.")
         else:
             print("❌ Operación cancelada.")
 

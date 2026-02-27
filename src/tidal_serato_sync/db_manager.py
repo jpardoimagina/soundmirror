@@ -186,3 +186,11 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM pending_crate_additions WHERE tidal_id = ?", (tidal_id,))
             conn.commit()
+
+    def clear_all_track_mappings(self):
+        """Removes all track mappings and pending cleanup records from the database."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM track_mapping")
+            cursor.execute("DELETE FROM pending_crate_additions")
+            conn.commit()
