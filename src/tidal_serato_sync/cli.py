@@ -354,21 +354,21 @@ def main():
         with sqlite3.connect(db.db_path) as conn:
             cursor = conn.cursor()
             if args.status:
-                cursor.execute("SELECT id, local_path, status, bitrate FROM track_mapping WHERE status = ?", (args.status,))
+                cursor.execute("SELECT id, local_path, status, bitrate, display_name FROM track_mapping WHERE status = ?", (args.status,))
             else:
-                cursor.execute("SELECT id, local_path, status, bitrate FROM track_mapping")
+                cursor.execute("SELECT id, local_path, status, bitrate, display_name FROM track_mapping")
                 
             rows = cursor.fetchall()
             print(f"Total canciones encontradas: {len(rows)}\n")
-            for tid, path, status, bitrate in rows:
+            for tid, path, status, bitrate, dname in rows:
                 bitrate_str = f" ({bitrate}kbps)" if bitrate else ""
-                display_name = Path(path).name
                 
                 if path.startswith("TIDAL_IMPORT:"):
                     tidal_id = path.split(":")[-1]
-                    display_name = f"✨ [IMPORTADO DE TIDAL] ID: {tidal_id} (Pendiente de descarga)"
-                
-                print(f"[{tid}] [{status.upper()}] {display_name}{bitrate_str}")
+                    name_str = dname if dname else "Unknown"
+                    print(f"[{tid}] [{status.upper()}] TIDAL_IMPORT:{tidal_id} ({name_str}){bitrate_str}")
+                else:
+                    print(f"[{tid}] [{status.upper()}] {Path(path).name}{bitrate_str}")
 
     elif args.command == "force":
         with sqlite3.connect(db.db_path) as conn:

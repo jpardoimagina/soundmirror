@@ -200,7 +200,8 @@ class SyncEngine:
                 logging.info(f"Found new track on Tidal: {pt.name} - {pt.artist.name}")
                 placeholder_path = f"TIDAL_IMPORT:{tidal_id}"
                 
-                self.db.upsert_track(placeholder_path, tidal_id)
+                display_name = f"{pt.artist.name} - {pt.name}"
+                self.db.upsert_track(placeholder_path, tidal_id, display_name=display_name)
                 self.db.update_track_status(placeholder_path, 'pending_download')
                 
                 # Register that it needs to be added to THIS crate

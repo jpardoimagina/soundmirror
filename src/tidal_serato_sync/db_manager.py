@@ -75,23 +75,28 @@ class DatabaseManager:
             if 'downloaded_path' not in cols:
                 cursor.execute("ALTER TABLE track_mapping ADD COLUMN downloaded_path TEXT")
             
+            # Migration check: ensure display_name column exists
+            if 'display_name' not in cols:
+                cursor.execute("ALTER TABLE track_mapping ADD COLUMN display_name TEXT")
+            
             # Clean up existing crate_name extensions if any
             cursor.execute("UPDATE mirror_config SET crate_name = REPLACE(crate_name, '.crate', '') WHERE crate_name LIKE '%.crate'")
             conn.commit()
 
-    def upsert_track(self, local_path: str, tidal_id: str, isrc: Optional[str] = None, bitrate: Optional[int] = None):
+    def upsert_track(self, local_path: str, tidal_id: str, isrc: Optional[str] = None, bitrate: Optional[int] = None, display_name: Optional[str] = None):
         """Adds or updates a track mapping."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO track_mapping (local_path, tidal_track_id, isrc, bitrate, last_sync)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                INSERT INTO track_mapping (local_path, tidal_track_id, isrc, bitrate, last_sync, display_name)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
                 ON CONFLICT(local_path) DO UPDATE SET
                     tidal_track_id = excluded.tidal_track_id,
                     isrc = excluded.isrc,
                     bitrate = COALESCE(excluded.bitrate, track_mapping.bitrate),
+                    display_name = COALESCE(excluded.display_name, track_mapping.display_name),
                     last_sync = CURRENT_TIMESTAMP
-            """, (local_path, tidal_id, isrc, bitrate))
+            """, (local_path, tidal_id, isrc, bitrate, display_name))
             conn.commit()
 
     def update_track_status(self, local_path: str, status: str, downloaded_path: Optional[str] = None):
