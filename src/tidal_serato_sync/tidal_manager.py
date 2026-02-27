@@ -271,12 +271,13 @@ class TidalManager:
             print(f"Error getting tracks for playlist {playlist_id}: {e}")
             return []
 
-    def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]):
+    def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]) -> bool:
         """
         Adds tracks to a playlist by ID, ensuring no duplicates are added.
 
         :param playlist_id: The ID of the playlist.
         :param track_ids: List of track IDs to add.
+        :return: True if successful (or already present), False otherwise.
         """
         try:
             playlist = self.get_playlist(playlist_id)
@@ -296,10 +297,13 @@ class TidalManager:
                     print(f"Added {len(to_add)} new tracks to playlist '{playlist.name}'.")
                 else:
                     print(f"No new tracks to add to playlist '{playlist.name}'.")
+                return True
             else:
                 print(f"Error: Playlist {playlist_id} not found.")
+                return False
         except Exception as e:
             print(f"Error adding tracks to playlist: {e}")
+            return False
 
 
 if __name__ == "__main__":
