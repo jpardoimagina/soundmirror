@@ -110,13 +110,13 @@ class DatabaseManager:
             conn.commit()
 
     def get_track_info(self, local_path: str) -> Optional[Dict]:
-        """Gets the Tidal ID and bitrate for a given local path."""
+        """Gets the Tidal ID, bitrate and display name for a given local path."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT tidal_track_id, bitrate FROM track_mapping WHERE local_path = ?", (local_path,))
+            cursor.execute("SELECT tidal_track_id, bitrate, display_name FROM track_mapping WHERE local_path = ?", (local_path,))
             result = cursor.fetchone()
             if result:
-                return {'tidal_id': result[0], 'bitrate': result[1]}
+                return {'tidal_id': result[0], 'bitrate': result[1], 'display_name': result[2]}
             return None
 
     def get_tidal_id(self, local_path: str) -> Optional[str]:

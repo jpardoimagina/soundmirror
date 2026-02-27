@@ -392,23 +392,52 @@ class SyncEngine:
                     print(f"==================================================")
                     
                     try:
-                        # Snapshot files in the download base dir before download (recursively to catch Videos/Tracks/Albums)
-                        # We limit the search to media files to be faster and ignore hidden files
+                        # 1. Check if the file already exists in download_base_dir
                         allowed_exts = {'.flac', '.mp3', '.mp4', '.m4a', '.wav'}
-                        files_before = set(
-                            str(f.relative_to(download_base_dir)) for f in download_base_dir.rglob("*") 
-                            if f.is_file() and f.suffix.lower() in allowed_exts and not f.name.startswith('.')
-                        )
                         
-                        # Execute download
-                        subprocess.run(cmd, shell=True, check=True)
+                        # Get track info from DB to help matching
+                        track_info = self.db.get_track_info(original_path_str.lstrip('/'))
+                        display_name = track_info.get('display_name') if track_info else None
                         
-                        # Snapshot files after download
-                        files_after = set(
-                            str(f.relative_to(download_base_dir)) for f in download_base_dir.rglob("*") 
-                            if f.is_file() and f.suffix.lower() in allowed_exts and not f.name.startswith('.')
-                        )
-                        new_files = list(files_after - files_before)
+                        found_file = None
+                        # Try to find an existing file that matches
+                        potential_files = list(download_base_dir.rglob("*"))
+                        for f in potential_files:
+                            if f.is_file() and f.suffix.lower() in allowed_exts and not f.name.startswith('.'):
+                                # Matching logic:
+                                # 1. Exact stem match with original
+                                # 2. Contains tidal_id (if tidal-dl-ng was configured to include it, though unlikely)
+                                # 3. Contains display_name parts
+                                if f.stem.lower() == original_path_obj.stem.lower():
+                                    found_file = f
+                                    break
+                                if display_name:
+                                    # Very basic match: if a significant part of display_name is in the filename
+                                    # We'll be conservative to avoid wrong matches
+                                    clean_dname = self._clean_search_term(display_name).lower()
+                                    if clean_dname in f.name.lower() or f.stem.lower() in clean_dname:
+                                        found_file = f
+                                        break
+                        
+                        if found_file:
+                            print(f"ℹ️  Archivo encontrado en caché temporal: {found_file.name}")
+                            new_files = [str(found_file.relative_to(download_base_dir))]
+                        else:
+                            # 2. Snapshot files in the download base dir before download
+                            files_before = set(
+                                str(f.relative_to(download_base_dir)) for f in download_base_dir.rglob("*") 
+                                if f.is_file() and f.suffix.lower() in allowed_exts and not f.name.startswith('.')
+                            )
+                            
+                            # Execute download
+                            subprocess.run(cmd, shell=True, check=True)
+                            
+                            # Snapshot files after download
+                            files_after = set(
+                                str(f.relative_to(download_base_dir)) for f in download_base_dir.rglob("*") 
+                                if f.is_file() and f.suffix.lower() in allowed_exts and not f.name.startswith('.')
+                            )
+                            new_files = list(files_after - files_before)
                         
                         if new_files:
                             # Assuming one file downloaded per command
