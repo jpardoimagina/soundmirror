@@ -304,8 +304,11 @@ class SyncEngine:
             rows = cursor.fetchall()
             
             for local_path, tidal_id in rows:
-                # Use absolute path
-                full_path = Path("/" + local_path) if not local_path.startswith("/") else Path(local_path)
+                # Use absolute path (unless it's a Tidal import placeholder)
+                if local_path.startswith("TIDAL_IMPORT:"):
+                    full_path = Path(local_path)
+                else:
+                    full_path = Path("/" + local_path) if not local_path.startswith("/") else Path(local_path)
                 commands.append(f"# Track: {full_path}")
                 # Note: tidal-dl-ng doesn't have a direct -o flag for 'dl'. 
                 # It uses the global 'download_base_path'.
@@ -385,7 +388,9 @@ class SyncEngine:
                     # Extract tidal_id from command
                     tidal_id = cmd.split("/track/")[-1].strip('"')
                     
-                    is_tidal_import = original_path_str.startswith("TIDAL_IMPORT:")
+                    # Normalize path for checking if it's a Tidal import
+                    normalized_path = original_path_str.lstrip('/')
+                    is_tidal_import = normalized_path.startswith("TIDAL_IMPORT:")
                     
                     if is_tidal_import:
                         target_dir = download_base_dir

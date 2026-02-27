@@ -102,10 +102,10 @@ def main():
     match_parser.add_argument("index", type=int, help="ID del crate (obtenido con 'list')")
     match_parser.add_argument("query", help="Patrón de búsqueda para el track en Tidal")
 
-    # Command: match-id
-    match_id_parser = subparsers.add_parser("match-id", help="Añade un track de Tidal a un crate directamente por URL")
-    match_id_parser.add_argument("index", type=int, help="ID del crate (obtenido con 'list')")
-    match_id_parser.add_argument("url", help="URL del track en Tidal (ej: https://tidal.com/track/...)")
+    # Command: upgrade
+    upgrade_parser = subparsers.add_parser("upgrade", help="Clona metadatos y actualiza crates para un archivo mejorado (ej: MP3 -> FLAC)")
+    upgrade_parser.add_argument("old", help="Ruta al archivo antiguo (o backup)")
+    upgrade_parser.add_argument("new", help="Ruta al archivo nuevo")
 
     args = parser.parse_args()
 
@@ -559,6 +559,69 @@ def main():
                 print(f"💡 Aparecerá en Serato tras ejecutar 'sync'.")
             else:
                 print(f"❌ Error al añadir el track.")
+
+    elif args.command == "upgrade":
+        from .metadata_handler import MetadataCloner
+        
+        old_path = Path(args.old).absolute()
+        new_path = Path(args.new).absolute()
+
+        print(f"\n" + "="*60)
+        print(f"FORZANDO VINCULACIÓN Y METADATOS")
+        print(f"Origen:  {old_path}")
+        print(f"Destino: {new_path}")
+        print("="*60 + "\n")
+
+        if not old_path.exists():
+            print(f"⚠️  ADVERTENCIA: No se encuentra el archivo de origen: {old_path}")
+        
+        if not new_path.exists():
+            print(f"❌ ERROR: No se encuentra el archivo de destino: {new_path}")
+            sys.exit(1)
+
+        # 1. Clone Metadata
+        print("1. 🔍 Extrayendo metadatos de Serato y puntos de Cue...")
+        markers = MetadataCloner.extract_serato_markers(str(old_path))
+        if markers:
+            print(f"   - Se encontraron {len(markers)} marcadores. Inyectando en el nuevo fichero...")
+            if MetadataCloner.inject_serato_markers(markers, str(new_path)):
+                print("   ✅ Metadatos clonados con éxito.")
+            else:
+                print("   ❌ Error al inyectar metadatos.")
+        else:
+            print("   ℹ️  No se detectaron marcadores de Serato en el origen.")
+
+        # 2. Update Crates
+        print(f"2. 📦 Actualizando Crates de Serato en {serato_dir}...")
+        modified_crates = CrateHandler.update_track_path_globally(
+            serato_dir, 
+            str(old_path), 
+            str(new_path)
+        )
+
+        if modified_crates:
+            print(f"   ✅ Se actualizaron {len(modified_crates)} crates:")
+            for crate in modified_crates:
+                print(f"      - {crate}")
+        else:
+            print("   ℹ️  No se encontraron referencias al archivo antiguo en ningún Crate.")
+
+        # 3. Update Database
+        print("3. 🗄️  Actualizando base de datos local...")
+        db = DatabaseManager()
+        old_track_info = db.get_track_info(str(old_path).lstrip('/'))
+        if old_track_info and old_track_info.get('tidal_id'):
+            tidal_id = old_track_info['tidal_id']
+            display_name = old_track_info.get('display_name')
+            
+            db.upsert_track(str(new_path).lstrip('/'), tidal_id, display_name=display_name)
+            db.update_track_status(str(new_path).lstrip('/'), 'synced', str(new_path))
+            db.update_track_status(str(old_path).lstrip('/'), 'pending_cleanup', str(old_path))
+            print(f"   ✅ Mapeo actualizado: {tidal_id} -> {new_path.name}")
+        else:
+            print("   ℹ️  El archivo antiguo no estaba registrado en la base de datos.")
+
+        print("\n🎉 ¡Proceso completado!")
 
     else:
         parser.print_help()
