@@ -98,9 +98,9 @@ def main():
     googleupload_parser.add_argument("--exclude", action='append', help="Patrón a excluir (ej: *.crate, _Serato_)")
 
     # Command: match
-    match_parser = subparsers.add_parser("match", help="Asocia manualmente un track local con uno de Tidal")
-    match_parser.add_argument("id", type=int, help="ID local del track (obtenido con 'list-tracks')")
-    match_parser.add_argument("--search", help="Cadena de búsqueda personalizada para Tidal")
+    match_parser = subparsers.add_parser("match", help="Busca un track en Tidal y lo añade al crate seleccionado")
+    match_parser.add_argument("index", type=int, help="ID del crate (obtenido con 'list')")
+    match_parser.add_argument("query", help="Patrón de búsqueda para el track en Tidal")
 
     args = parser.parse_args()
 
@@ -362,7 +362,13 @@ def main():
             print(f"Total canciones encontradas: {len(rows)}\n")
             for tid, path, status, bitrate in rows:
                 bitrate_str = f" ({bitrate}kbps)" if bitrate else ""
-                print(f"[{tid}] [{status.upper()}] {Path(path).name}{bitrate_str}")
+                display_name = Path(path).name
+                
+                if path.startswith("TIDAL_IMPORT:"):
+                    tidal_id = path.split(":")[-1]
+                    display_name = f"✨ [IMPORTADO DE TIDAL] ID: {tidal_id} (Pendiente de descarga)"
+                
+                print(f"[{tid}] [{status.upper()}] {display_name}{bitrate_str}")
 
     elif args.command == "force":
         with sqlite3.connect(db.db_path) as conn:
@@ -510,8 +516,18 @@ def main():
             sys.exit(1)
 
     elif args.command == "match":
+        mirrors = db.get_mirrors()
+        if args.index < 0 or args.index >= len(mirrors):
+            print(f"❌ ID de crate inválido: {args.index}")
+            sys.exit(1)
+            
+        crate_path, playlist_id, _, _, name = mirrors[args.index]
+        if not playlist_id:
+            print(f"❌ El crate seleccionado ({name}) no tiene una playlist de Tidal asociada.")
+            sys.exit(1)
+            
         engine = SyncEngine()
-        engine.manual_match_track(args.id, search_query=args.search)
+        engine.interactive_add_to_playlist(playlist_id, args.query)
 
     else:
         parser.print_help()

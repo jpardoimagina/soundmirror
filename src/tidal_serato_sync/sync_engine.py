@@ -510,73 +510,53 @@ class SyncEngine:
                 print("\n\nOperación cancelada por el usuario (Ctrl+C). Saliendo...")
                 return
 
-    def manual_match_track(self, track_id: int, search_query: Optional[str] = None):
-        """Manually match a local track with a Tidal track."""
+    def interactive_add_to_playlist(self, playlist_id: str, query: str):
+        """Searches Tidal and adds a selected track to the specified playlist."""
         if not self.tidal.authenticate():
             logging.error("Failed to authenticate with Tidal.")
             return
 
-        with sqlite3.connect(self.db.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT local_path, tidal_track_id FROM track_mapping WHERE id = ?", (track_id,))
-            row = cursor.fetchone()
-            
-            if not row:
-                print(f"❌ No se encontró ningún track con ID local: {track_id}")
+        print(f"🔍 Buscando en Tidal: '{query}'")
+        # Use search_tracks with a limit of 5 as requested
+        results = self.tidal.search_tracks("", query, limit=5)
+        
+        if not results:
+            print("❌ No se encontraron resultados en Tidal.")
+            return
+        
+        print("\nResultados encontrados (máx 5):")
+        for i, track in enumerate(results):
+            artist_name = track.artist.name if hasattr(track, 'artist') and track.artist else "Unknown Artist"
+            album_name = track.album.name if hasattr(track, 'album') and track.album else "Unknown Album"
+            duration_min = track.duration // 60
+            duration_sec = track.duration % 60
+            print(f"[{i}] {artist_name} - {track.name} ({duration_min}:{duration_sec:02d}) [Album: {album_name}]")
+        
+        print(f"[{len(results)}] Cancelar")
+        
+        try:
+            choice = input(f"\nSelecciona una opción (0-{len(results)}): ")
+            if not choice.strip():
+                print("❌ Operación cancelada.")
                 return
-            
-            local_path, current_tidal_id = row
-            db_path = local_path.lstrip('/')
-            
-            if not search_query:
-                # Extract search terms from filename
-                filename = Path(local_path).name
-                if " - " in filename:
-                    parts = filename.split(" - ", 1)
-                    artist = parts[0].split(". ", 1)[-1] if ". " in parts[0] else parts[0]
-                    title = parts[1].rsplit(".", 1)[0]
-                    search_query = f"{title} {artist}"
+                
+            choice_idx = int(choice)
+            if 0 <= choice_idx < len(results):
+                selected_track = results[choice_idx]
+                track_id = str(selected_track.id)
+                
+                print(f"➕ Añadiendo a la playlist: {selected_track.name} (ID: {track_id})")
+                if self.tidal.add_tracks_to_playlist(playlist_id, [track_id]):
+                    print(f"✅ Track añadido correctamente a Tidal.")
+                    print(f"💡 El track aparecerá en Serato tras la próxima sincronización ('python run.py sync').")
                 else:
-                    search_query = filename.rsplit(".", 1)[0]
-            
-            print(f"🔍 Buscando en Tidal: '{search_query}'")
-            results = self.tidal.search_tracks("", search_query, limit=10) # Using query as artist for broader search if needed
-            
-            if not results:
-                print("❌ No se encontraron resultados en Tidal.")
-                return
-            
-            print("\nResultados encontrados:")
-            for i, track in enumerate(results):
-                artist_name = track.artist.name if hasattr(track, 'artist') and track.artist else "Unknown Artist"
-                album_name = track.album.name if hasattr(track, 'album') and track.album else "Unknown Album"
-                print(f"[{i}] {artist_name} - {track.name} (Album: {album_name})")
-            
-            print(f"[{len(results)}] Cancelar")
-            
-            try:
-                choice = int(input(f"\nSelecciona una opción (0-{len(results)}): "))
-                if 0 <= choice < len(results):
-                    selected_track = results[choice]
-                    new_tidal_id = str(selected_track.id)
-                    
-                    print(f"✅ Mapeando: {Path(local_path).name} -> {new_tidal_id}")
-                    self.db.upsert_track(db_path, new_tidal_id)
-                    self.db.update_track_status(db_path, 'pending_download')
-                    
-                    # Update relevant playlists
-                    active_mirrors = self.db.get_mirrors(only_active=True)
-                    for crate_path, playlist_id, _, _, _ in active_mirrors:
-                        # We don't know for sure if it's in this crate without reading it, 
-                        # but we can try adding to all active playlists if needed or just let sync handle it.
-                        # For manual match, it's safer to just trigger it for the recovery.
-                        pass
-                        
-                    print(f"🚀 Track actualizado en la DB y marcado como 'pending_download' para recover.")
-                else:
-                    print("Operación cancelada.")
-            except ValueError:
-                print("Entrada no válida. Operación cancelada.")
+                    print(f"❌ Error al añadir el track a la playlist de Tidal.")
+            else:
+                print("❌ Operación cancelada.")
+        except ValueError:
+            print("❌ Entrada no válida. Operación cancelada.")
+        except Exception as e:
+            print(f"❌ Error inesperado: {e}")
 
     def _create_orphan_crate(self, crate_name: str, tracks: List[str], subcrates_dir: Path):
         if not subcrates_dir.exists():
