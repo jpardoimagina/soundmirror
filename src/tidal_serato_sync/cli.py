@@ -102,6 +102,11 @@ def main():
     match_parser.add_argument("index", type=int, help="ID del crate (obtenido con 'list')")
     match_parser.add_argument("query", help="Patrón de búsqueda para el track en Tidal")
 
+    # Command: match-id
+    match_id_parser = subparsers.add_parser("match-id", help="Añade un track de Tidal a un crate directamente por URL")
+    match_id_parser.add_argument("index", type=int, help="ID del crate (obtenido con 'list')")
+    match_id_parser.add_argument("url", help="URL del track en Tidal (ej: https://tidal.com/track/...)")
+
     args = parser.parse_args()
 
     # Load configuration
@@ -528,6 +533,32 @@ def main():
             
         engine = SyncEngine()
         engine.interactive_add_to_playlist(playlist_id, args.query)
+
+    elif args.command == "match-id":
+        mirrors = db.get_mirrors()
+        if args.index < 0 or args.index >= len(mirrors):
+            print(f"❌ ID de crate inválido: {args.index}")
+            sys.exit(1)
+            
+        crate_path, playlist_id, _, _, name = mirrors[args.index]
+        if not playlist_id:
+            print(f"❌ El crate seleccionado ({name}) no tiene una playlist de Tidal asociada.")
+            sys.exit(1)
+            
+        # Extract ID from URL
+        track_id = args.url.split("/track/")[-1].split("?")[0].strip("/")
+        if not track_id.isdigit():
+            print(f"❌ No se pudo extraer un ID válido de la URL: {args.url}")
+            sys.exit(1)
+            
+        engine = SyncEngine()
+        if engine.tidal.authenticate():
+            print(f"➕ Añadiendo track {track_id} a la playlist de '{name}'...")
+            if engine.tidal.add_tracks_to_playlist(playlist_id, [track_id]):
+                print(f"✅ Track añadido correctamente.")
+                print(f"💡 Aparecerá en Serato tras ejecutar 'sync'.")
+            else:
+                print(f"❌ Error al añadir el track.")
 
     else:
         parser.print_help()
