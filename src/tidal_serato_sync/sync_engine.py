@@ -85,6 +85,10 @@ class SyncEngine:
                 logging.error(f"Could not create/find playlist {playlist_name}")
                 return
 
+        # Fetch current playlist tracks once for efficiency and idempotency checks
+        playlist_tracks = self.tidal.get_playlist_tracks(playlist_id)
+        tidal_playlist_ids = {str(t.id) for t in playlist_tracks if hasattr(t, 'id')}
+
         # 3. Synchronize Serato -> Tidal
         found_on_tidal = []
         orphaned_tracks = []
@@ -139,7 +143,7 @@ class SyncEngine:
                         t_track = self.tidal.search_track(clean_title, clean_artist)
 
                 if t_track:
-                    tidal_id = t_track.id
+                    tidal_id = str(t_track.id)
                     self.db.upsert_track(db_path, tidal_id, bitrate=bitrate)
                     logging.info(f"\033[92mMapped: {db_path} -> {tidal_id} ({bitrate}k)\033[0m")
                 else:
@@ -166,20 +170,28 @@ class SyncEngine:
 
         # Update playlist with all found tracks
         if found_on_tidal:
-            logging.info(f"Updating Tidal playlist {playlist_id} with {len(found_on_tidal)} tracks.")
-            try:
-                self.tidal.add_tracks_to_playlist(playlist_id, found_on_tidal)
-            except Exception as e:
-                if "404" in str(e) or "Not Found" in str(e):
-                    logging.warning(f"Playlist {playlist_id} not found on Tidal. Clearing ID and retrying...")
-                    self.db.add_mirror(crate_path, playlist_id=None)
-                else:
-                    logging.error(f"Error updating playlist: {e}")
+            # Filter matches that already exist in the playlist for logging purposes, 
+            # though tidal_manager also handles this.
+            ids_to_add = [tid for tid in found_on_tidal if str(tid) not in tidal_playlist_ids]
+            
+            if ids_to_add:
+                logging.info(f"Adding {len(ids_to_add)} new tracks to Tidal playlist {playlist_id}.")
+                try:
+                    self.tidal.add_tracks_to_playlist(playlist_id, ids_to_add)
+                except Exception as e:
+                    if "404" in str(e) or "Not Found" in str(e):
+                        logging.warning(f"Playlist {playlist_id} not found on Tidal. Clearing ID and retrying...")
+                        self.db.add_mirror(crate_path, playlist_id=None)
+                    else:
+                        logging.error(f"Error updating playlist: {e}")
+            else:
+                logging.info(f"Tidal playlist {playlist_name} is already up to date.")
 
         # 4. Synchronize Tidal -> Serato (check for new tracks on Tidal)
         logging.info(f"Checking for new tracks added to Tidal playlist {playlist_name}...")
-        playlist_tracks = self.tidal.get_playlist_tracks(playlist_id)
         new_from_tidal = 0
+        
+        # We reuse playlist_tracks fetched at the beginning
         
         for pt in playlist_tracks:
             if not hasattr(pt, 'id'): continue
@@ -498,6 +510,74 @@ class SyncEngine:
                 print("\n\nOperación cancelada por el usuario (Ctrl+C). Saliendo...")
                 return
 
+    def manual_match_track(self, track_id: int, search_query: Optional[str] = None):
+        """Manually match a local track with a Tidal track."""
+        if not self.tidal.authenticate():
+            logging.error("Failed to authenticate with Tidal.")
+            return
+
+        with sqlite3.connect(self.db.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT local_path, tidal_track_id FROM track_mapping WHERE id = ?", (track_id,))
+            row = cursor.fetchone()
+            
+            if not row:
+                print(f"❌ No se encontró ningún track con ID local: {track_id}")
+                return
+            
+            local_path, current_tidal_id = row
+            db_path = local_path.lstrip('/')
+            
+            if not search_query:
+                # Extract search terms from filename
+                filename = Path(local_path).name
+                if " - " in filename:
+                    parts = filename.split(" - ", 1)
+                    artist = parts[0].split(". ", 1)[-1] if ". " in parts[0] else parts[0]
+                    title = parts[1].rsplit(".", 1)[0]
+                    search_query = f"{title} {artist}"
+                else:
+                    search_query = filename.rsplit(".", 1)[0]
+            
+            print(f"🔍 Buscando en Tidal: '{search_query}'")
+            results = self.tidal.search_tracks("", search_query, limit=10) # Using query as artist for broader search if needed
+            
+            if not results:
+                print("❌ No se encontraron resultados en Tidal.")
+                return
+            
+            print("\nResultados encontrados:")
+            for i, track in enumerate(results):
+                artist_name = track.artist.name if hasattr(track, 'artist') and track.artist else "Unknown Artist"
+                album_name = track.album.name if hasattr(track, 'album') and track.album else "Unknown Album"
+                print(f"[{i}] {artist_name} - {track.name} (Album: {album_name})")
+            
+            print(f"[{len(results)}] Cancelar")
+            
+            try:
+                choice = int(input(f"\nSelecciona una opción (0-{len(results)}): "))
+                if 0 <= choice < len(results):
+                    selected_track = results[choice]
+                    new_tidal_id = str(selected_track.id)
+                    
+                    print(f"✅ Mapeando: {Path(local_path).name} -> {new_tidal_id}")
+                    self.db.upsert_track(db_path, new_tidal_id)
+                    self.db.update_track_status(db_path, 'pending_download')
+                    
+                    # Update relevant playlists
+                    active_mirrors = self.db.get_mirrors(only_active=True)
+                    for crate_path, playlist_id, _, _, _ in active_mirrors:
+                        # We don't know for sure if it's in this crate without reading it, 
+                        # but we can try adding to all active playlists if needed or just let sync handle it.
+                        # For manual match, it's safer to just trigger it for the recovery.
+                        pass
+                        
+                    print(f"🚀 Track actualizado en la DB y marcado como 'pending_download' para recover.")
+                else:
+                    print("Operación cancelada.")
+            except ValueError:
+                print("Entrada no válida. Operación cancelada.")
+
     def _create_orphan_crate(self, crate_name: str, tracks: List[str], subcrates_dir: Path):
         if not subcrates_dir.exists():
             logging.error(f"Cannot create orphan crate: Subcrates directory '{subcrates_dir}' not found.")
@@ -514,7 +594,7 @@ class SyncEngine:
         if crate_path.exists():
             try:
                 for t in handler.get_tracks():
-                    existing_tracks.add(t['path'])
+                    existing_tracks.add(t['local_path'])
             except Exception:
                 pass
         

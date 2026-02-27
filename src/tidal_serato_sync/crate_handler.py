@@ -124,7 +124,8 @@ class CrateHandler:
         return False
 
     def add_track_to_crate(self, new_path: str) -> bool:
-        """Appends a new track to the end of the crate file."""
+        """Appends a new track to the end of the crate file.
+        Returns True if the track was added, False if it already existed or an error occurred."""
         if not self.crate_path.exists():
             # Create a basic Serato crate with version block
             try:
@@ -139,9 +140,14 @@ class CrateHandler:
                 return False
 
         try:
+            # Check if track already exists to ensure idempotency
+            existing_tracks = self.get_tracks()
+            norm_new_path = new_path.lstrip('/')
+            if any(t['local_path'].lstrip('/') == norm_new_path for t in existing_tracks):
+                return False
+
             # Prepare new otrk block
             # Format: 'otrk' + length + 'ptrk' + length + value
-            norm_new_path = new_path.lstrip('/')
             ptrk_val = norm_new_path.encode('utf-16-be')
             ptrk_len = len(ptrk_val)
             

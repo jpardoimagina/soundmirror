@@ -14,6 +14,7 @@ class TidalManager:
         """Initialize the TidalManager."""
         self.session = tidalapi.Session()
         self.user = None
+        self._folder_cache = {}  # Cache for folder names to IDs
 
     def authenticate(self) -> bool:
         """
@@ -87,21 +88,28 @@ class TidalManager:
         :param artist_name: Name of the artist.
         :return: The first matching Track object or None.
         """
-        query = f"{track_name} {artist_name}"
-        search_result = self.session.search(query, models=[tidalapi.Track], limit=10)
+        results = self.search_tracks(track_name, artist_name, limit=10)
         
         # Try to find a good match in the results
-        for track in search_result.get('tracks', []):
+        for track in results:
             # Simple check: does the artist match roughly?
             if artist_name.lower() in track.artist.name.lower() or \
                track.artist.name.lower() in artist_name.lower():
                 return track
         
         # Fallback to first result if any
-        if search_result.get('tracks'):
-            return search_result['tracks'][0]
+        if results:
+            return results[0]
             
         return None
+
+    def search_tracks(self, track_name: str, artist_name: str, limit: int = 5) -> List[tidalapi.Track]:
+        """
+        Searches for tracks by name and artist and returns multiple results.
+        """
+        query = f"{track_name} {artist_name}"
+        search_result = self.session.search(query, models=[tidalapi.Track], limit=limit)
+        return search_result.get('tracks', [])
 
     def create_folder(self, folder_name: str) -> Optional[str]:
         """
@@ -113,7 +121,11 @@ class TidalManager:
             # Note: tidalapi 0.7+ might have user.create_folder
             # If not, it might be session.create_folder
             folder = self.user.create_folder(folder_name)
-            return folder.id
+            if folder and folder.id:
+                # Update cache
+                self._folder_cache[folder_name.lower()] = folder.id
+                return folder.id
+            return None
         except Exception as e:
             print(f"Error creating Tidal folder '{folder_name}': {e}")
             return None
@@ -121,20 +133,70 @@ class TidalManager:
     def get_folder_by_name(self, folder_name: str) -> Optional[str]:
         """
         Searches for a folder by name among the user's folders.
+        Uses direct V2 API call for robustness and implements pagination.
         """
         if not self.user:
             return None
         
+        # Check cache first
+        if folder_name.lower() in self._folder_cache:
+            return self._folder_cache[folder_name.lower()]
+        
         try:
-            # Get user's folders/items from root
-            root_folder = self.session.folder()
-            for item in root_folder.items():
-                if isinstance(item, tidalapi.playlist.Folder) and item.name.lower() == folder_name.lower():
-                    return item.id
+            # Use direct API call as tidalapi's root_folder.items() might filter by includeOnly=PLAYLIST
+            # or have small default limits.
+            base_url = "https://api.tidal.com/v2/my-collection/playlists/folders"
+            limit = 50
+            offset = 0
+            
+            while True:
+                params = {
+                    "sessionId": self.session.session_id,
+                    "countryCode": self.session.country_code,
+                    "limit": limit,
+                    "offset": offset,
+                    "includeOnly": "FOLDER"
+                }
+                
+                response = self.session.request.request("GET", base_url, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                items = data.get('items', [])
+                if not items:
+                    break
+                
+                for item in items:
+                    # In V2 API, folder data is inside 'item' or directly as keys
+                    # Based on debug: name is at top level of object in 'items' list, 
+                    # and id is inside 'data'
+                    name = item.get('name', '')
+                    folder_data = item.get('data', {})
+                    folder_id = folder_data.get('id')
+                    
+                    if name.lower() == folder_name.lower() and folder_id:
+                        self._folder_cache[folder_name.lower()] = folder_id
+                        return folder_id
+                
+                if len(items) < limit:
+                    break
+                offset += limit
+                
             return None
         except Exception as e:
-            print(f"Error searching for folder '{folder_name}': {e}")
-            return None
+            print(f"Error searching for folder '{folder_name}' using direct API: {e}")
+            # Fallback to old method just in case API structure changes unexpectedly
+            try:
+                root_folder = self.session.folder()
+                for item in root_folder.items():
+                    if isinstance(item, tidalapi.playlist.Folder) and item.name.lower() == folder_name.lower():
+                        folder_id = item.id
+                        self._folder_cache[folder_name.lower()] = folder_id
+                        return folder_id
+                return None
+            except Exception as e2:
+                print(f"Fallback search also failed: {e2}")
+                return None
 
     def move_playlist_to_folder(self, playlist_id: str, folder_id: str) -> bool:
         """
@@ -211,7 +273,7 @@ class TidalManager:
 
     def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]):
         """
-        Adds tracks to a playlist by ID.
+        Adds tracks to a playlist by ID, ensuring no duplicates are added.
 
         :param playlist_id: The ID of the playlist.
         :param track_ids: List of track IDs to add.
@@ -219,8 +281,21 @@ class TidalManager:
         try:
             playlist = self.get_playlist(playlist_id)
             if playlist:
-                playlist.add(track_ids)
-                print(f"Added {len(track_ids)} tracks to playlist '{playlist.name}'.")
+                # Fetch existing tracks to prevent duplicates
+                existing_tracks = playlist.tracks()
+                existing_ids = {str(t.id) for t in existing_tracks if hasattr(t, 'id')}
+                
+                # Filter track_ids to only include those not already in the playlist
+                to_add = []
+                for tid in track_ids:
+                    if str(tid) not in existing_ids:
+                        to_add.append(tid)
+                
+                if to_add:
+                    playlist.add(to_add)
+                    print(f"Added {len(to_add)} new tracks to playlist '{playlist.name}'.")
+                else:
+                    print(f"No new tracks to add to playlist '{playlist.name}'.")
             else:
                 print(f"Error: Playlist {playlist_id} not found.")
         except Exception as e:

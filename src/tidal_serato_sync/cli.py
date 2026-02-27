@@ -41,6 +41,14 @@ def main():
     sync_parser.add_argument("--force-update", action="store_true", help="Fuerza pending_download en canciones existentes que cumplan el filtro de bitrate")
     sync_parser.add_argument("--orphan-crate", type=str, help="Nombre del crate para almacenar los tracks que no se encuentren en Tidal")
 
+    # Command: rm
+    rm_parser = subparsers.add_parser("rm", help="Quita un crate de la lista de sincronización activa")
+    rm_parser.add_argument("index", type=int, help="Índice del crate (obtenido con 'list')")
+
+    # Command: reset
+    reset_parser = subparsers.add_parser("reset", help="Mantiene el crate activo pero borra toda la info de los tracks de esa crate")
+    reset_parser.add_argument("index", type=int, help="Índice del crate (obtenido con 'list')")
+
     # Command: compare
     compare_parser = subparsers.add_parser("compare", help="Compara un crate con su playlist de Tidal (diferencias)")
     compare_parser.add_argument("index", type=int, help="Índice del crate (obtenido con 'list')")
@@ -76,6 +84,11 @@ def main():
     googleupload_parser.add_argument("--source", help="Ruta local a sincronizar")
     googleupload_parser.add_argument("--dest", help="Nombre de la carpeta de destino en Google Drive")
     googleupload_parser.add_argument("--exclude", action='append', help="Patrón a excluir (ej: *.crate, _Serato_)")
+
+    # Command: match
+    match_parser = subparsers.add_parser("match", help="Asocia manualmente un track local con uno de Tidal")
+    match_parser.add_argument("id", type=int, help="ID local del track (obtenido con 'list-tracks')")
+    match_parser.add_argument("--search", help="Cadena de búsqueda personalizada para Tidal")
 
     args = parser.parse_args()
 
@@ -140,10 +153,11 @@ def main():
             
             # Check if already exists
             exists = False
-            for m in config["mirrors"]:
-                if m["crate_path"] == str(crate_path):
-                    exists = True
-                    break
+            if "mirrors" in config:
+                for m in config["mirrors"]:
+                    if m["crate_path"] == str(crate_path):
+                        exists = True
+                        break
             
             if not exists:
                 if "mirrors" not in config:
@@ -160,6 +174,66 @@ def main():
                 print(f"El crate '{Path(crate_path).name}' ya está marcado.")
         else:
             print("Índice fuera de rango.")
+
+    elif args.command == "rm":
+        mirrors = list_serato_crates(db, serato_dir)
+        if 0 <= args.index < len(mirrors):
+            crate_path, _, _, _, name = mirrors[args.index]
+            
+            # Deactivate in DB
+            db.add_mirror(crate_path, playlist_id=None, is_active=0)
+            
+            # Remove from mirrors.json
+            config_path = Path("mirrors.json")
+            if config_path.exists():
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                
+                if "mirrors" in config:
+                    initial_count = len(config["mirrors"])
+                    config["mirrors"] = [m for m in config["mirrors"] if "crate_path" in m and m["crate_path"] != str(crate_path)]
+                    if len(config["mirrors"]) < initial_count:
+                        with open(config_path, 'w') as f:
+                            json.dump(config, f, indent=2)
+                        print(f"Crate '{name}' eliminado de mirrors.json.")
+            
+            print(f"✅ Crate '{name}' desactivado y quitado de la lista activa.")
+        else:
+            print("❌ Índice fuera de rango.")
+
+    elif args.command == "reset":
+        mirrors = list_serato_crates(db, serato_dir)
+        if 0 <= args.index < len(mirrors):
+            crate_path_str, _, _, is_active, name = mirrors[args.index]
+            
+            if not is_active:
+                print(f"⚠️ El crate '{name}' ya está INACTIVO. No es necesario resetearlo.")
+                sys.exit(0)
+            
+            print(f"🔄 Reseteando mappings para el crate: {name}")
+            
+            try:
+                crate_handler = CrateHandler(crate_path_str)
+                serato_tracks = crate_handler.get_tracks()
+                paths_to_clear = [t['local_path'] for t in serato_tracks]
+                
+                if not paths_to_clear:
+                    print("ℹ️ El crate está vacío en disco. Nada que limpiar.")
+                else:
+                    with sqlite3.connect(db.db_path) as conn:
+                        cursor = conn.cursor()
+                        # Use placeholders for the IN clause
+                        placeholders = ','.join(['?'] * len(paths_to_clear))
+                        cursor.execute(f"DELETE FROM track_mapping WHERE local_path IN ({placeholders})", paths_to_clear)
+                        deleted_count = cursor.rowcount
+                        conn.commit()
+                        print(f"✅ Se han eliminado {deleted_count} registros de track_mapping para este crate.")
+                        print(f"ℹ️ El crate '{name}' sigue ACTIVO y se re-sincronizará en la próxima ejecución.")
+            except Exception as e:
+                print(f"❌ Error durante el reset: {e}")
+                sys.exit(1)
+        else:
+            print("❌ Índice fuera de rango.")
 
     elif args.command == "compare":
         mirrors = db.get_mirrors()
@@ -268,15 +342,15 @@ def main():
         with sqlite3.connect(db.db_path) as conn:
             cursor = conn.cursor()
             if args.status:
-                cursor.execute("SELECT local_path, status, bitrate FROM track_mapping WHERE status = ?", (args.status,))
+                cursor.execute("SELECT id, local_path, status, bitrate FROM track_mapping WHERE status = ?", (args.status,))
             else:
-                cursor.execute("SELECT local_path, status, bitrate FROM track_mapping")
+                cursor.execute("SELECT id, local_path, status, bitrate FROM track_mapping")
                 
             rows = cursor.fetchall()
             print(f"Total canciones encontradas: {len(rows)}\n")
-            for path, status, bitrate in rows:
+            for tid, path, status, bitrate in rows:
                 bitrate_str = f" ({bitrate}kbps)" if bitrate else ""
-                print(f"[{status.upper()}] {Path(path).name}{bitrate_str}")
+                print(f"[{tid}] [{status.upper()}] {Path(path).name}{bitrate_str}")
 
     elif args.command == "force":
         with sqlite3.connect(db.db_path) as conn:
@@ -412,6 +486,10 @@ def main():
         except Exception as e:
             print(f"\n❌ Error durante la sincronización: {e}")
             sys.exit(1)
+
+    elif args.command == "match":
+        engine = SyncEngine()
+        engine.manual_match_track(args.id, search_query=args.search)
 
     else:
         parser.print_help()
