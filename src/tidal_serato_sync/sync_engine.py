@@ -1,6 +1,8 @@
 import json
 import logging
 import sqlite3
+import time
+import tidalapi
 from pathlib import Path
 from typing import List, Dict, Optional
 from .crate_handler import CrateHandler
@@ -22,7 +24,7 @@ class SyncEngine:
         with open(self.config_path, 'r') as f:
             return json.load(f)
 
-    def run_sync(self, max_bitrate: Optional[int] = None, force_update: bool = False, orphan_crate: Optional[str] = None):
+    def run_sync(self, max_bitrate: Optional[int] = None, force_update: bool = False, orphan_crate: Optional[str] = None, interactive: bool = False):
         """Executes the synchronization for all active mirrors in the database."""
         if not self.tidal.authenticate():
             logging.error("Failed to authenticate with Tidal.")
@@ -43,7 +45,8 @@ class SyncEngine:
                 "playlist_name": playlist_name or Path(crate_path).stem,
                 "max_bitrate": max_bitrate,
                 "force_update": force_update,
-                "orphan_crate": orphan_crate
+                "orphan_crate": orphan_crate,
+                "interactive": interactive
             }
             try:
                 self.sync_mirror(mirror)
@@ -59,8 +62,9 @@ class SyncEngine:
         max_bitrate = mirror.get("max_bitrate")
         force_update = mirror.get("force_update", False)
         orphan_crate_name = mirror.get("orphan_crate", None)
+        interactive = mirror.get("interactive", False)
         
-        logging.info(f"Syncing crate {Path(crate_path).name} <-> Tidal '{playlist_name}'")
+        logging.info(f"Syncing crate {Path(crate_path).name} <-> Tidal '{playlist_name}' (Interactive: {interactive})")
 
         # 1. Read Serato Crate
         handler = CrateHandler(crate_path)
@@ -147,6 +151,19 @@ class SyncEngine:
                     display_name = f"{t_track.artist.name} - {t_track.name}"
                     self.db.upsert_track(db_path, tidal_id, bitrate=bitrate, display_name=display_name)
                     logging.info(f"\033[92mMapped: {db_path} -> {tidal_id} ({bitrate}k)\033[0m")
+                elif interactive:
+                    print(f"\n⚠️  No se encontró match automático para: {db_path}")
+                    selected_track = self.interactive_match(title, artist)
+                    if selected_track == "cancel":
+                        logging.info("Búsqueda cancelada por usuario.")
+                    elif selected_track:
+                        tidal_id = str(selected_track.id)
+                        display_name = f"{selected_track.artist.name} - {selected_track.name}"
+                        self.db.upsert_track(db_path, tidal_id, bitrate=bitrate, display_name=display_name)
+                        logging.info(f"\033[92mMapped (Manual): {db_path} -> {tidal_id} ({bitrate}k)\033[0m")
+                    else:
+                        # User selected Mark as Orphan
+                        self._handle_orphaned_track(db_path)
                 else:
                     logging.warning(f"\033[91mCould not find on Tidal: {artist} - {title}\033[0m")
                     orphaned_tracks.append(db_path)
@@ -585,6 +602,96 @@ class SyncEngine:
             except KeyboardInterrupt:
                 print("\n\nOperación cancelada por el usuario (Ctrl+C). Saliendo...")
                 return
+
+    def interactive_match(self, title: str, artist: str) -> Optional[tidalapi.Track]:
+        """
+        Interactive loop to find a track on Tidal.
+        Returns the selected Track object or None if marked as orphan/cancelled.
+        """
+        query = f"{title} {artist}".strip()
+        while True:
+            print(f"\n🔍 Buscando en Tidal: '{query}'")
+            results = self.tidal.search_tracks("", query, limit=10)
+            
+            if not results:
+                print("❌ No se encontraron resultados.")
+            else:
+                print("\nResultados encontrados (máx 10):")
+                for i, track in enumerate(results):
+                    artist_name = track.artist.name if hasattr(track, 'artist') and track.artist else "Unknown Artist"
+                    album_name = track.album.name if hasattr(track, 'album') and track.album else "Unknown Album"
+                    duration_min = track.duration // 60
+                    duration_sec = track.duration % 60
+                    # Try to get streamable URL or just the ID
+                    print(f"[{i}] {artist_name} - {track.name} ({duration_min}:{duration_sec:02d}) [Album: {album_name}]")
+                
+            print(f"[{len(results)}] Reintentar con otro texto de búsqueda")
+            print(f"[{len(results)+1}] Marcar como HUÉRFANO (Mover a carpeta de huérfanos)")
+            print(f"[{len(results)+2}] Cancelar búsqueda para este tema")
+            
+            try:
+                choice = input(f"\nSelecciona una opción (0-{len(results)+2}): ")
+                if not choice.strip():
+                    continue
+                    
+                choice_idx = int(choice)
+                if 0 <= choice_idx < len(results):
+                    # Preview check (optional)
+                    confirm = input(f"¿Elegir '{results[choice_idx].name}'? (S/n): ")
+                    if confirm.lower() != 'n':
+                        return results[choice_idx]
+                elif choice_idx == len(results):
+                    query = input("Nuevo texto de búsqueda: ")
+                elif choice_idx == len(results) + 1:
+                    print("Marcando como huérfano...")
+                    return None # Signal to handle as orphan
+                elif choice_idx == len(results) + 2:
+                    return "cancel"
+            except ValueError:
+                print("❌ Entrada no válida.")
+
+    def _handle_orphaned_track(self, local_path_str: str):
+        """Moves a track to the orphan directory and updates crates."""
+        import shutil
+        old_path = Path("/" + local_path_str) if not local_path_str.startswith("/") else Path(local_path_str)
+        if not old_path.exists():
+            logging.warning(f"No se pudo encontrar el archivo original para mover a huérfanos: {old_path}")
+            return
+
+        orphan_dir = self.config.get("settings", {}).get("orphan_dir")
+        if not orphan_dir:
+            logging.error("No se ha configurado 'orphan_dir' en mirrors.json. No se puede mover el huerfano.")
+            return
+
+        orphan_path = Path(orphan_dir)
+        orphan_path.mkdir(parents=True, exist_ok=True)
+        
+        new_path = orphan_path / old_path.name
+        
+        # Check if already exists in orphan dir
+        if new_path.exists():
+            new_path = orphan_path / f"{old_path.stem}_{int(time.time())}{old_path.suffix}"
+
+        print(f"📦 Moviendo tema huérfano: {old_path.name} -> {new_path}")
+        try:
+            shutil.move(str(old_path), str(new_path))
+            
+            # Update crates
+            serato_dir = self.config.get("settings", {}).get("serato_base_dir")
+            if serato_dir:
+                modified = CrateHandler.update_track_path_globally(serato_dir, local_path_str, str(new_path))
+                if modified:
+                    print(f"   ✅ Se actualizaron {len(modified)} crates.")
+            
+            # Update DB
+            self.db.upsert_track(str(new_path).lstrip('/'), tidal_id=None, display_name=f"[HUERFANO] {old_path.name}")
+            self.db.update_track_status(str(new_path).lstrip('/'), 'orphan')
+            # Remove old entry if path changed
+            if local_path_str != str(new_path).lstrip('/'):
+                with sqlite3.connect(self.db.db_path) as conn:
+                    conn.execute("DELETE FROM track_mapping WHERE local_path = ?", (local_path_str,))
+        except Exception as e:
+            logging.error(f"Error al mover huérfano: {e}")
 
     def interactive_add_to_playlist(self, playlist_id: str, query: str):
         """Searches Tidal and adds a selected track to the specified playlist."""

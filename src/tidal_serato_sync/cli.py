@@ -2,6 +2,7 @@ import argparse
 import sys
 import json
 import sqlite3
+import struct
 from pathlib import Path
 from .crate_handler import CrateHandler
 from .db_manager import DatabaseManager
@@ -49,6 +50,7 @@ def main():
     sync_parser.add_argument("--max-bitrate", type=int, help="Solo sincroniza canciones locales con bitrate menor o igual a este valor (kbps)")
     sync_parser.add_argument("--force-update", action="store_true", help="Fuerza pending_download en canciones existentes que cumplan el filtro de bitrate")
     sync_parser.add_argument("--orphan-crate", type=str, help="Nombre del crate para almacenar los tracks que no se encuentren en Tidal")
+    sync_parser.add_argument("--interactive", action="store_true", help="Habilita la búsqueda interactiva para temas no encontrados")
 
     # Command: rm
     rm_parser = subparsers.add_parser("rm", help="Quita un crate de la lista de sincronización activa")
@@ -106,6 +108,11 @@ def main():
     upgrade_parser = subparsers.add_parser("upgrade", help="Clona metadatos y actualiza crates para un archivo mejorado (ej: MP3 -> FLAC)")
     upgrade_parser.add_argument("old", help="Ruta al archivo antiguo (o backup)")
     upgrade_parser.add_argument("new", help="Ruta al archivo nuevo")
+
+    # Command: link
+    link_parser = subparsers.add_parser("link", help="Vincula manualmente una playlist de Tidal a un crate de Serato")
+    link_parser.add_argument("url", help="URL o ID de la playlist en Tidal")
+    link_parser.add_argument("crate", help="Nombre o ruta del crate de Serato")
 
     args = parser.parse_args()
 
@@ -333,7 +340,8 @@ def main():
         engine = SyncEngine()
         force_update = getattr(args, 'force_update', False)
         orphan_crate = getattr(args, 'orphan_crate', None)
-        engine.run_sync(max_bitrate=args.max_bitrate, force_update=force_update, orphan_crate=orphan_crate)
+        interactive = getattr(args, 'interactive', False)
+        engine.run_sync(max_bitrate=args.max_bitrate, force_update=force_update, orphan_crate=orphan_crate, interactive=interactive)
 
     elif args.command == "recover":
         # Handle temp_dir from config or save new one
@@ -622,6 +630,81 @@ def main():
             print("   ℹ️  El archivo antiguo no estaba registrado en la base de datos.")
 
         print("\n🎉 ¡Proceso completado!")
+
+    elif args.command == "link":
+        # Extract ID from URL
+        playlist_id = args.url.split("/playlist/")[-1].split("?")[0].strip("/")
+        
+        # Resolve crate path
+        crate_name = args.crate
+        if not crate_name.endswith(".crate"):
+            crate_name += ".crate"
+            
+        # If it's a full path, use it. Otherwise, look/create in Serato directory
+        if "/" in args.crate or "\\" in args.crate:
+            crate_path = Path(args.crate)
+        else:
+            crate_path = Path(serato_dir) / "Subcrates" / crate_name
+            
+        print(f"🔗 Vinculando Playlist '{playlist_id}' con Crate '{crate_path.name}'...")
+        
+        # Ensure it exists (create if not)
+        if not crate_path.exists():
+            print(f"📦 El crate no existe. Creando uno nuevo en: {crate_path}")
+            handler = CrateHandler(str(crate_path))
+            # add_track_to_crate triggers creation if doesn't exist. 
+            # We can use a dummy track or just initialize it manually
+            try:
+                crate_path.parent.mkdir(parents=True, exist_ok=True)
+                # Initialize basic crate structure
+                from .crate_handler import CrateHandler
+                handler = CrateHandler(str(crate_path))
+                # Trigger internal creation by calling a method that writes if file missing
+                handler.add_track_to_crate("dummy_track_placeholder")
+                # Remove dummy track immediately to leave it empty
+                # Actually, handler doesn't have a remove-track, but we can just write it with only header
+                vrsn_str = '1.0/Serato ScratchLive Crate'
+                vrsn_val = vrsn_str.encode('utf-16-be')
+                vrsn_block = b'vrsn' + struct.pack('>I', len(vrsn_val)) + vrsn_val
+                with open(crate_path, 'wb') as f:
+                    f.write(vrsn_block)
+            except Exception as e:
+                print(f"❌ Error creando el crate: {e}")
+                sys.exit(1)
+
+        # Update DB
+        db.add_mirror(str(crate_path), playlist_id=playlist_id, direction="bidirectional", is_active=1)
+        
+        # Update mirrors.json
+        config_path = Path("mirrors.json")
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+        else:
+            config = {"mirrors": [], "settings": {"serato_base_dir": serato_dir}}
+            
+        # Check if already exists
+        exists = False
+        if "mirrors" in config:
+            for m in config["mirrors"]:
+                if m["crate_path"] == str(crate_path):
+                    m["playlist_id"] = playlist_id
+                    exists = True
+                    break
+        
+        if not exists:
+            if "mirrors" not in config:
+                config["mirrors"] = []
+            config["mirrors"].append({
+                "crate_path": str(crate_path),
+                "playlist_id": playlist_id,
+                "direction": "bidirectional"
+            })
+            
+        with open(config_path, 'w') as f:
+            json.dump(config, f, indent=2)
+            
+        print(f"✅ ¡Vinculado correctamente! Ejecuta 'sync' para sincronizar los temas.")
 
     else:
         parser.print_help()

@@ -12,7 +12,8 @@
       "mp4",
       "flac",
       "m4a"
-    ]
+    ],
+    "orphan_dir": "/Users/jpardo/Music/Orphans"
   },
   "mirrors": [
     {
