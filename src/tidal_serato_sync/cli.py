@@ -7,6 +7,8 @@ from pathlib import Path
 from .crate_handler import CrateHandler
 from .db_manager import DatabaseManager
 from .sync_engine import SyncEngine
+from .metadata_handler import MetadataCloner
+from .drive_sync_manager import DriveSyncManager
 
 def list_serato_crates(db, serato_dir, only_active: bool = False):
     mirrors = db.get_mirrors(only_active=False)  # Always get all to maintain indices
@@ -489,8 +491,6 @@ def main():
                 time.sleep(args.interval * 60)
 
     elif args.command == "googleupload":
-        from .drive_sync_manager import DriveSyncManager
-        
         source = args.source or config.get("settings", {}).get("drive_sync_source")
         dest_folder_name = args.dest or config.get("settings", {}).get("drive_sync_dest")
         
@@ -569,8 +569,6 @@ def main():
                 print(f"❌ Error al añadir el track.")
 
     elif args.command == "upgrade":
-        from .metadata_handler import MetadataCloner
-        
         old_path = Path(args.old).absolute()
         new_path = Path(args.new).absolute()
 
@@ -657,7 +655,6 @@ def main():
             try:
                 crate_path.parent.mkdir(parents=True, exist_ok=True)
                 # Initialize basic crate structure
-                from .crate_handler import CrateHandler
                 handler = CrateHandler(str(crate_path))
                 # Trigger internal creation by calling a method that writes if file missing
                 handler.add_track_to_crate("dummy_track_placeholder")
