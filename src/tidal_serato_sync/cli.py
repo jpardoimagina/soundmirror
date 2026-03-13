@@ -122,11 +122,11 @@ def main():
 
     # Command: track ignore
     ignore_parser = track_subparsers.add_parser("ignore", help="Ignora un track para evitar que sea procesado por recover")
-    ignore_parser.add_argument("path", help="Patrón o nombre de la canción a ignorar")
+    ignore_parser.add_argument("path_or_id", help="ID numérico o patrón/nombre de la canción a ignorar")
 
     # Command: track recover
     t_recover_parser = track_subparsers.add_parser("recover", help="Marca un track para ser recuperado (vuelve a pending_download)")
-    t_recover_parser.add_argument("path", help="Patrón o nombre de la canción a recuperar")
+    t_recover_parser.add_argument("path_or_id", help="ID numérico o patrón/nombre de la canción a recuperar")
 
     args = parser.parse_args()
 
@@ -722,16 +722,23 @@ def main():
 
         with sqlite3.connect(db.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT local_path FROM track_mapping WHERE local_path LIKE ?", (f"%{args.path}%",))
+            
+            # Check if it's an ID (numeric string)
+            is_id = args.path_or_id.isdigit()
+            if is_id:
+                cursor.execute("SELECT local_path FROM track_mapping WHERE id = ?", (int(args.path_or_id),))
+            else:
+                cursor.execute("SELECT local_path FROM track_mapping WHERE local_path LIKE ?", (f"%{args.path_or_id}%",))
+            
             matches = cursor.fetchall()
             
             if not matches:
-                print(f"No se encontró ninguna canción que coincida con: {args.path}")
+                print(f"No se encontró ninguna canción que coincida con: {args.path_or_id}")
             elif len(matches) > 1:
                 print(f"Búsqueda ambigua. Hay {len(matches)} canciones que coinciden:")
                 for m in matches:
                     print(f"  - {m[0]}")
-                print("Por favor, sé más específico.")
+                print("Por favor, sé más específico o usa el ID numérico.")
             else:
                 target_path = matches[0][0]
                 if args.track_command == "ignore":
