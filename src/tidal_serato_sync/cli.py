@@ -381,25 +381,26 @@ def main():
         with sqlite3.connect(db.db_path) as conn:
             cursor = conn.cursor()
             if args.status:
-                cursor.execute("SELECT id, local_path, status, bitrate, display_name FROM track_mapping WHERE status = ?", (args.status,))
+                cursor.execute("SELECT id, local_path, status, bitrate, display_name, tidal_track_id FROM track_mapping WHERE status = ?", (args.status,))
             else:
-                cursor.execute("SELECT id, local_path, status, bitrate, display_name FROM track_mapping")
+                cursor.execute("SELECT id, local_path, status, bitrate, display_name, tidal_track_id FROM track_mapping")
                 
             rows = cursor.fetchall()
             print(f"Total canciones encontradas: {len(rows)}\n")
-            for tid, path, status, bitrate, dname in rows:
+            for tid, path, status, bitrate, dname, tidal_id in rows:
                 bitrate_str = f" ({bitrate}kbps)" if bitrate else ""
+                url_str = f" - https://tidal.com/track/{tidal_id}" if tidal_id else ""
                 
                 status_display = status.upper()
                 if status == 'ignored':
                     status_display = "SYNCED"
                 
                 if path.startswith("TIDAL_IMPORT:"):
-                    tidal_id = path.split(":")[-1]
+                    placeholder_id = path.split(":")[-1]
                     name_str = dname if dname else "Unknown"
-                    print(f"[{tid}] [{status_display}] TIDAL_IMPORT:{tidal_id} ({name_str}){bitrate_str}")
+                    print(f"[{tid}] [{status_display}] TIDAL_IMPORT:{placeholder_id} ({name_str}){bitrate_str}{url_str}")
                 else:
-                    print(f"[{tid}] [{status_display}] {Path(path).name}{bitrate_str}")
+                    print(f"[{tid}] [{status_display}] {Path(path).name}{bitrate_str}{url_str}")
 
     elif args.command == "force":
         with sqlite3.connect(db.db_path) as conn:
