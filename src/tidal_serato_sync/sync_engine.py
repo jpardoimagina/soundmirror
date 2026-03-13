@@ -182,8 +182,13 @@ class SyncEngine:
                 
                 # Check if local file exists. If not, prepare for restoration.
                 if not full_path.exists():
-                    logging.warning(f"File missing at: {full_path}. Marking as pending_download.")
-                    self.db.update_track_status(db_path, 'pending_download')
+                    current_status = track_info.get('status') if track_info else None
+                    if current_status != 'ignored':
+                        logging.warning(f"File missing at: {full_path}. Marking as pending_download.")
+                        self.db.update_track_status(db_path, 'pending_download')
+                    else:
+                        logging.info(f"File missing at: {full_path} but is IGNORED. Skipping recovery.")
+                        
                     try:
                         full_path.parent.mkdir(parents=True, exist_ok=True)
                     except Exception as e:

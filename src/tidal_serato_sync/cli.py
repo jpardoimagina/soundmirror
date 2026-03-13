@@ -116,6 +116,18 @@ def main():
     link_parser.add_argument("url", help="URL o ID de la playlist en Tidal")
     link_parser.add_argument("crate", help="Nombre o ruta del crate de Serato")
 
+    # Command: track
+    track_parser = subparsers.add_parser("track", help="Gestiona el estado de tracks individuales")
+    track_subparsers = track_parser.add_subparsers(dest="track_command")
+
+    # Command: track ignore
+    ignore_parser = track_subparsers.add_parser("ignore", help="Ignora un track para evitar que sea procesado por recover")
+    ignore_parser.add_argument("path", help="Patrón o nombre de la canción a ignorar")
+
+    # Command: track recover
+    t_recover_parser = track_subparsers.add_parser("recover", help="Marca un track para ser recuperado (vuelve a pending_download)")
+    t_recover_parser.add_argument("path", help="Patrón o nombre de la canción a recuperar")
+
     args = parser.parse_args()
 
     # Load configuration
@@ -702,6 +714,32 @@ def main():
             json.dump(config, f, indent=2)
             
         print(f"✅ ¡Vinculado correctamente! Ejecuta 'sync' para sincronizar los temas.")
+
+    elif args.command == "track":
+        if not args.track_command:
+            track_parser.print_help()
+            sys.exit(0)
+
+        with sqlite3.connect(db.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT local_path FROM track_mapping WHERE local_path LIKE ?", (f"%{args.path}%",))
+            matches = cursor.fetchall()
+            
+            if not matches:
+                print(f"No se encontró ninguna canción que coincida con: {args.path}")
+            elif len(matches) > 1:
+                print(f"Búsqueda ambigua. Hay {len(matches)} canciones que coinciden:")
+                for m in matches:
+                    print(f"  - {m[0]}")
+                print("Por favor, sé más específico.")
+            else:
+                target_path = matches[0][0]
+                if args.track_command == "ignore":
+                    db.update_track_status(target_path, 'ignored')
+                    print(f"✅ Canción marcada como IGNORADA (se saltará en recover):\n   {target_path}")
+                elif args.track_command == "recover":
+                    db.update_track_status(target_path, 'pending_download')
+                    print(f"✅ Canción marcada para RECUPERACIÓN:\n   {target_path}")
 
     else:
         parser.print_help()
