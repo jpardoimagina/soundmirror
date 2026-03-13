@@ -390,12 +390,16 @@ def main():
             for tid, path, status, bitrate, dname in rows:
                 bitrate_str = f" ({bitrate}kbps)" if bitrate else ""
                 
+                status_display = status.upper()
+                if status == 'ignored':
+                    status_display = "SYNCED"
+                
                 if path.startswith("TIDAL_IMPORT:"):
                     tidal_id = path.split(":")[-1]
                     name_str = dname if dname else "Unknown"
-                    print(f"[{tid}] [{status.upper()}] TIDAL_IMPORT:{tidal_id} ({name_str}){bitrate_str}")
+                    print(f"[{tid}] [{status_display}] TIDAL_IMPORT:{tidal_id} ({name_str}){bitrate_str}")
                 else:
-                    print(f"[{tid}] [{status.upper()}] {Path(path).name}{bitrate_str}")
+                    print(f"[{tid}] [{status_display}] {Path(path).name}{bitrate_str}")
 
     elif args.command == "force":
         with sqlite3.connect(db.db_path) as conn:
@@ -743,7 +747,7 @@ def main():
                 target_path = matches[0][0]
                 if args.track_command == "ignore":
                     db.update_track_status(target_path, 'ignored')
-                    print(f"✅ Canción marcada como IGNORADA (se saltará en recover):\n   {target_path}")
+                    print(f"✅ Canción marcada como SYNCED (ignorada para recover):\n   {target_path}")
                 elif args.track_command == "recover":
                     db.update_track_status(target_path, 'pending_download')
                     print(f"✅ Canción marcada para RECUPERACIÓN:\n   {target_path}")
