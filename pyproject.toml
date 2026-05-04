@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tidal-serato-sync"
-version = "1.5"
+version = "1.6"
 description = "Bidirectional sync tool between Serato crates and Tidal playlists with download recovery"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,6 +31,7 @@ dependencies = [
     "google-api-python-client",
     "google-auth-httplib2",
     "google-auth-oauthlib",
+    "discogs-client>=2.3.15",
 ]
 
 [project.optional-dependencies]

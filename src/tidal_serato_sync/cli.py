@@ -4,11 +4,104 @@ import json
 import sqlite3
 import struct
 from pathlib import Path
+from mutagen import File as MutagenFile
+from mutagen.flac import FLAC
+from mutagen.mp4 import MP4
 from .crate_handler import CrateHandler
 from .db_manager import DatabaseManager
 from .sync_engine import SyncEngine
 from .metadata_handler import MetadataCloner
 from .drive_sync_manager import DriveSyncManager
+from .discogs_manager import DiscogsManager
+from .discogs_manager import DiscogsManager
+
+def extract_track_metadata(file_path: Path) -> dict:
+    """Extract metadata from an audio file.
+    
+    Args:
+        file_path: Path to the audio file
+    
+    Returns:
+        Dictionary with title, artist, album, and year (if available)
+    """
+    metadata = {
+        'title': None,
+        'artist': None,
+        'album': None,
+        'year': None
+    }
+    
+    try:
+        audio = MutagenFile(str(file_path))
+        if audio is None:
+            # Try to parse from filename
+            filename = file_path.stem
+            if " - " in filename:
+                parts = filename.split(" - ", 1)
+                metadata['artist'] = parts[0].strip()
+                metadata['title'] = parts[1].strip()
+            else:
+                metadata['title'] = filename
+            return metadata
+        
+        # Handle MP3 (ID3 tags)
+        if hasattr(audio, 'tags') and audio.tags and not isinstance(audio, (FLAC, MP4)):
+            tags = audio.tags
+            if 'TIT2' in tags:
+                metadata['title'] = str(tags['TIT2'].text[0])
+            if 'TPE1' in tags:
+                metadata['artist'] = str(tags['TPE1'].text[0])
+            if 'TALB' in tags:
+                metadata['album'] = str(tags['TALB'].text[0])
+            if 'TDRC' in tags:
+                metadata['year'] = str(tags['TDRC'].text[0])[:4]
+        
+        # Handle FLAC (Vorbis comments)
+        elif isinstance(audio, FLAC):
+            if audio.tags:
+                metadata['title'] = audio.tags.get('TITLE', [None])[0]
+                metadata['artist'] = audio.tags.get('ARTIST', [None])[0]
+                metadata['album'] = audio.tags.get('ALBUM', [None])[0]
+                year_tag = audio.tags.get('DATE', [None])[0]
+                if year_tag:
+                    metadata['year'] = str(year_tag)[:4]
+        
+        # Handle MP4/M4A (Atom tags)
+        elif isinstance(audio, MP4):
+            if audio.tags:
+                metadata['title'] = audio.tags.get('©nam', [None])[0]
+                metadata['artist'] = audio.tags.get('©ART', [None])[0]
+                metadata['album'] = audio.tags.get('©alb', [None])[0]
+                year_tag = audio.tags.get('©day', [None])[0]
+                if year_tag:
+                    metadata['year'] = str(year_tag)[:4]
+        
+        # Fallback to filename parsing if no title found
+        if not metadata['title']:
+            filename = file_path.stem
+            # Remove track numbers like "01. " or "01 - "
+            filename = filename.split('. ', 1)[-1]
+            filename = filename.split(' - ', 1)[-1]
+            
+            if " - " in filename and not metadata['artist']:
+                parts = filename.split(" - ", 1)
+                metadata['artist'] = parts[0].strip()
+                metadata['title'] = parts[1].strip()
+            else:
+                metadata['title'] = filename
+    
+    except Exception as e:
+        print(f"   ⚠️  Error extrayendo metadata de {file_path.name}: {e}")
+        # Fallback to filename
+        filename = file_path.stem
+        if " - " in filename:
+            parts = filename.split(" - ", 1)
+            metadata['artist'] = parts[0].strip()
+            metadata['title'] = parts[1].strip()
+        else:
+            metadata['title'] = filename
+    
+    return metadata
 
 def list_serato_crates(db, serato_dir, only_active: bool = False):
     mirrors = db.get_mirrors(only_active=False)  # Always get all to maintain indices
@@ -106,6 +199,13 @@ def main():
     match_parser = subparsers.add_parser("match", help="Busca un track en Tidal y lo añade al crate seleccionado")
     match_parser.add_argument("index", type=int, help="ID del crate (obtenido con 'list')")
     match_parser.add_argument("query", help="Patrón de búsqueda para el track en Tidal")
+
+    # Command: sync_discogs
+    sync_discogs_parser = subparsers.add_parser("sync_discogs", help="Busca en Discogs ejemplares en vinilo de cada track del crate")
+    sync_discogs_parser.add_argument("crate_name", help="Nombre del crate (sin extensión .crate)")
+    sync_discogs_parser.add_argument("--artist", action="store_true", help="Usar también el artista de cada track como filtro")
+    sync_discogs_parser.add_argument("--album", action="store_true", help="Usar también el álbum de cada track como filtro")
+    sync_discogs_parser.add_argument("--year", action="store_true", help="Usar también el año de cada track como filtro")
 
     # Command: upgrade
     upgrade_parser = subparsers.add_parser("upgrade", help="Clona metadatos y actualiza crates para un archivo mejorado (ej: MP3 -> FLAC)")
@@ -807,6 +907,133 @@ def main():
                 elif args.track_command == "recover":
                     db.update_track_status(target_path, 'pending_download')
                     print(f"✅ Canción marcada para RECUPERACIÓN:\n   {target_path}")
+
+    elif args.command == "sync_discogs":
+        # Handle sync_discogs command
+        crate_name = args.crate_name
+        if not crate_name.endswith(".crate"):
+            crate_name += ".crate"
+        
+        # Try to find the crate in multiple locations
+        crate_path = None
+        possible_paths = [
+            Path(serato_dir) / "Subcrates" / crate_name,
+            Path(serato_dir) / crate_name,
+            Path(crate_name),
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                crate_path = path
+                break
+        
+        if not crate_path:
+            print(f"❌ Error: No se encontró el crate '{crate_name}'")
+            print(f"   Ubicaciones buscadas:")
+            for path in possible_paths:
+                print(f"   - {path}")
+            sys.exit(1)
+        
+        print(f"\n🎵 Buscando vinilos en Discogs para crate: {crate_path.name}")
+        print(f"📂 Ubicación: {crate_path}")
+        
+        # Extract tracks from crate
+        try:
+            handler = CrateHandler(str(crate_path))
+            crate_tracks = handler.get_tracks()
+        except Exception as e:
+            print(f"❌ Error leyendo el crate: {e}")
+            sys.exit(1)
+        
+        if not crate_tracks:
+            print(f"⚠️  El crate está vacío o no contiene tracks válidos.")
+            sys.exit(0)
+        
+        print(f"\n📊 Encontrados {len(crate_tracks)} tracks en el crate")
+        print(f"🔍 Iniciando búsqueda en Discogs Marketplace (solo vinilos)...\n")
+        
+        # Initialize Discogs manager
+        try:
+            discogs = DiscogsManager()
+        except ValueError as e:
+            print(f"❌ {e}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"❌ Error inicializando Discogs API: {e}")
+            sys.exit(1)
+        
+        # Process each track
+        all_results = []
+        processed = 0
+        
+        for i, track_data in enumerate(crate_tracks, 1):
+            local_path = track_data.get('local_path', '')
+            
+            # Normalize path
+            if not local_path.startswith('/'):
+                local_path = '/' + local_path
+            
+            full_path = Path(local_path)
+            
+            if not full_path.exists():
+                print(f"   [{i}/{len(crate_tracks)}] ⚠️  Archivo no encontrado: {full_path.name}")
+                continue
+            
+            # Extract metadata
+            metadata = extract_track_metadata(full_path)
+            
+            if not metadata['title']:
+                print(f"   [{i}/{len(crate_tracks)}] ⚠️  No se pudo extraer metadata de: {full_path.name}")
+                continue
+            
+            # Build search parameters
+            search_params = {
+                'title': metadata['title'],
+                'limit': 50
+            }
+            
+            # Apply optional filters based on flags
+            if args.artist and metadata['artist']:
+                search_params['artist'] = metadata['artist']
+            
+            if args.album and metadata['album']:
+                search_params['album'] = metadata['album']
+            
+            if args.year and metadata['year']:
+                search_params['year'] = metadata['year']
+            
+            # Display what we're searching for
+            search_display = f"{metadata['artist']} - {metadata['title']}" if metadata['artist'] else metadata['title']
+            print(f"   [{i}/{len(crate_tracks)}] 🔎 {search_display}")
+            
+            # Search Discogs
+            try:
+                results = discogs.search_marketplace(**search_params)
+                if results:
+                    all_results.extend(results)
+                    print(f"             ✓ {len(results)} resultados encontrados")
+                else:
+                    print(f"             - Sin resultados")
+                processed += 1
+            except Exception as e:
+                print(f"             ⚠️  Error: {e}")
+                continue
+        
+        # Display results
+        print(f"\n" + "="*120)
+        print(f"BÚSQUEDA COMPLETADA")
+        print(f"Tracks procesados: {processed}/{len(crate_tracks)}")
+        print(f"Total de resultados: {len(all_results)}")
+        print("="*120)
+        
+        if all_results:
+            # Group by seller and display
+            grouped = discogs.group_by_seller(all_results)
+            formatted_output = discogs.format_results_table(grouped)
+            print(formatted_output)
+        else:
+            print("\n⚠️  No se encontraron resultados en Discogs Marketplace.")
+            print("   Tip: Prueba buscar con menos filtros o verifica los nombres de los tracks.\n")
 
     else:
         parser.print_help()
