@@ -16,8 +16,24 @@ class DiscogsManager:
 
     def __init__(self):
         """Initialize the DiscogsManager with credentials from .env file."""
-        # Load environment variables
-        load_dotenv()
+        # Try to load environment variables from multiple locations
+        env_locations = [
+            Path.cwd() / '.env',  # Current directory
+            Path.home() / '.env',  # Home directory
+            Path(__file__).parent.parent.parent / '.env',  # Project root
+        ]
+        
+        loaded = False
+        for env_path in env_locations:
+            if env_path.exists():
+                load_dotenv(env_path)
+                loaded = True
+                logger.debug(f"Loaded .env from {env_path}")
+                break
+        
+        if not loaded:
+            # Try loading from environment without file
+            load_dotenv()
         
         self.user_token = os.getenv('DISCOGS_USER_TOKEN')
         self.username = os.getenv('DISCOGS_USERNAME')
@@ -26,7 +42,8 @@ class DiscogsManager:
             raise ValueError(
                 "Credenciales de Discogs no encontradas. "
                 "Asegúrate de que DISCOGS_USER_TOKEN y DISCOGS_USERNAME "
-                "estén definidos en el archivo .env"
+                "estén definidos en el archivo .env\n"
+                f"Ubicaciones buscadas: {', '.join(str(p) for p in env_locations)}"
             )
         
         # Initialize Discogs client
