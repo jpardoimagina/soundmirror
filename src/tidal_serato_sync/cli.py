@@ -206,6 +206,7 @@ def main():
     sync_discogs_parser.add_argument("--artist", action="store_true", help="Usar también el artista de cada track como filtro")
     sync_discogs_parser.add_argument("--album", action="store_true", help="Usar también el álbum de cada track como filtro")
     sync_discogs_parser.add_argument("--year", action="store_true", help="Usar también el año de cada track como filtro")
+    sync_discogs_parser.add_argument("--env-file", help="Ruta al archivo .env con las credenciales de Discogs")
 
     # Command: upgrade
     upgrade_parser = subparsers.add_parser("upgrade", help="Clona metadatos y actualiza crates para un archivo mejorado (ej: MP3 -> FLAC)")
@@ -954,7 +955,8 @@ def main():
         
         # Initialize Discogs manager
         try:
-            discogs = DiscogsManager()
+            env_file = args.env_file if hasattr(args, 'env_file') and args.env_file else None
+            discogs = DiscogsManager(env_file=env_file)
         except ValueError as e:
             print(f"❌ {e}")
             sys.exit(1)
