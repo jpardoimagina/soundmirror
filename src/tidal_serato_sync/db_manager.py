@@ -129,6 +129,36 @@ class DatabaseManager:
         info = self.get_track_info(local_path)
         return info['tidal_id'] if info else None
 
+    def get_track_by_tidal_id(self, tidal_id: str) -> Optional[Dict]:
+        """
+        Finds a track mapping by its Tidal ID.
+        Prioritizes existing files (status='synced').
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            # We prefer synced tracks that actually have a local path that exists (or just any synced one)
+            cursor.execute("""
+                SELECT local_path, status, display_name 
+                FROM track_mapping 
+                WHERE tidal_track_id = ? 
+                ORDER BY CASE WHEN status = 'synced' THEN 0 ELSE 1 END, last_sync DESC
+            """, (str(tidal_id),))
+            result = cursor.fetchone()
+            if result:
+                return {
+                    'local_path': result[0],
+                    'status': result[1],
+                    'display_name': result[2]
+                }
+            return None
+
+    def get_synced_tracks_info(self) -> list:
+        """Returns local_path, display_name, tidal_track_id for all synced tracks."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT local_path, display_name, tidal_track_id FROM track_mapping WHERE status = 'synced'")
+            return cursor.fetchall()
+
     def bulk_add_discovered_crates(self, crates):
         """Adds multiple crates as discovered/inactive."""
         with sqlite3.connect(self.db_path) as conn:

@@ -76,6 +76,7 @@ def main():
     # Command: list-tracks
     list_tracks_parser = subparsers.add_parser("list-tracks", help="Muestra el estado de todas las canciones en mapeo")
     list_tracks_parser.add_argument("--status", type=str, help="Filtrar por estado (ej. pending_download, synced, failed)")
+    list_tracks_parser.add_argument("--crate", type=str, help="Filtrar por nombre de crate (parcial o exacto)")
 
     # Command: force
     force_parser = subparsers.add_parser("force", help="Fuerza el estado pending_download para una canción")
@@ -378,18 +379,72 @@ def main():
         engine.run_recovery(dry_run=args.dry, quality=args.quality, temp_dir=temp_dir)
 
     elif args.command == "list-tracks":
+        # Build a mapping of local path -> list of crate names
+        crates = CrateHandler.list_all_crates(str(serato_path_obj))
+        
+        track_to_crates = {}
+        for crate_path in crates:
+            try:
+                crate_name = crate_path.stem
+                handler = CrateHandler(str(crate_path))
+                for t in handler.get_tracks():
+                    # Normalize path from crate
+                    p = Path(t['local_path']).as_posix().lstrip('/').lower()
+                    if p not in track_to_crates:
+                        track_to_crates[p] = []
+                    track_to_crates[p].append(crate_name)
+            except Exception:
+                pass
+
         with sqlite3.connect(db.db_path) as conn:
             cursor = conn.cursor()
             if args.status:
-                cursor.execute("SELECT id, local_path, status, bitrate, display_name, tidal_track_id FROM track_mapping WHERE status = ?", (args.status,))
+                cursor.execute("SELECT id, local_path, status, bitrate, display_name, tidal_track_id, downloaded_path FROM track_mapping WHERE status = ?", (args.status,))
             else:
-                cursor.execute("SELECT id, local_path, status, bitrate, display_name, tidal_track_id FROM track_mapping")
+                cursor.execute("SELECT id, local_path, status, bitrate, display_name, tidal_track_id, downloaded_path FROM track_mapping")
                 
             rows = cursor.fetchall()
-            print(f"Total canciones encontradas: {len(rows)}\n")
-            for tid, path, status, bitrate, dname, tidal_id in rows:
+
+            filtered_rows = []
+            for row in rows:
+                tid, path, status, bitrate, dname, tidal_id, dl_path = row
+                crates_for_track = []
+                
+                # Normalize physical scan paths for comparison
+                if path.startswith("TIDAL_IMPORT:"):
+                    placeholder_id = path.split(":")[-1]
+                    # Check pending additions
+                    pending_crates = db.get_pending_crate_additions(placeholder_id)
+                    for pc in pending_crates:
+                        cname = Path(pc).stem
+                        if cname not in crates_for_track:
+                            crates_for_track.append(cname)
+                    
+                    # If synced, also check physical crates using dl_path
+                    if dl_path:
+                        norm_dl_path = Path(dl_path).as_posix().lstrip('/').lower()
+                        physical_crates = track_to_crates.get(norm_dl_path, [])
+                        for pc in physical_crates:
+                            if pc not in crates_for_track:
+                                crates_for_track.append(pc)
+                else:
+                    # Normalize path from DB
+                    norm_path = Path(path).as_posix().lstrip('/').lower()
+                    crates_for_track = track_to_crates.get(norm_path, [])
+
+                # Apply --crate filter if requested
+                if args.crate:
+                    target = args.crate.lower()
+                    if not any(target in c.lower() for c in crates_for_track):
+                        continue
+                
+                filtered_rows.append((row, crates_for_track))
+
+            print(f"Total canciones encontradas: {len(filtered_rows)}\n")
+            for (tid, path, status, bitrate, dname, tidal_id, dl_path), crates_for_track in filtered_rows:
                 bitrate_str = f" ({bitrate}kbps)" if bitrate else ""
                 url_str = f" - https://tidal.com/track/{tidal_id}" if tidal_id else ""
+                crates_str = f" [Crates: {', '.join(crates_for_track)}]" if crates_for_track else ""
                 
                 status_display = status.upper()
                 if status == 'ignored':
@@ -398,9 +453,9 @@ def main():
                 if path.startswith("TIDAL_IMPORT:"):
                     placeholder_id = path.split(":")[-1]
                     name_str = dname if dname else "Unknown"
-                    print(f"[{tid}] [{status_display}] TIDAL_IMPORT:{placeholder_id} ({name_str}){bitrate_str}{url_str}")
+                    print(f"[{tid}] [{status_display}] TIDAL_IMPORT:{placeholder_id} ({name_str}){bitrate_str}{crates_str}{url_str}")
                 else:
-                    print(f"[{tid}] [{status_display}] {Path(path).name}{bitrate_str}{url_str}")
+                    print(f"[{tid}] [{status_display}] {Path(path).name}{bitrate_str}{crates_str}{url_str}")
 
     elif args.command == "force":
         with sqlite3.connect(db.db_path) as conn:

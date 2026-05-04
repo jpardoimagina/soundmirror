@@ -223,22 +223,60 @@ class SyncEngine:
         logging.info(f"Checking for new tracks added to Tidal playlist {playlist_name}...")
         new_from_tidal = 0
         
+        # Cache synced tracks info for fuzzy matching
+        synced_tracks_cache = self.db.get_synced_tracks_info()
+        
         # We reuse playlist_tracks fetched at the beginning
         
         for pt in playlist_tracks:
             if not hasattr(pt, 'id'): continue
             tidal_id = str(pt.id)
             if tidal_id not in found_on_tidal:
-                logging.info(f"Found new track on Tidal: {pt.name} - {pt.artist.name}")
-                placeholder_path = f"TIDAL_IMPORT:{tidal_id}"
+                # NEW CHECK: Is this Tidal track already synced globally in our DB?
+                existing_mapping = self.db.get_track_by_tidal_id(tidal_id)
                 
-                display_name = f"{pt.artist.name} - {pt.name}"
-                self.db.upsert_track(placeholder_path, tidal_id, display_name=display_name)
-                self.db.update_track_status(placeholder_path, 'pending_download')
-                
-                # Register that it needs to be added to THIS crate
-                self.db.add_pending_crate_addition(tidal_id, crate_path)
-                new_from_tidal += 1
+                if existing_mapping and existing_mapping['status'] == 'synced':
+                    existing_path = existing_mapping['local_path']
+                    logging.info(f"Found new track on Tidal ({pt.name}), but it's already SYNCED locally at: {existing_path}")
+                    
+                    # Add existing path to current crate immediately
+                    if handler.add_track_to_crate(existing_path):
+                        logging.info(f"✅ Added existing file to crate: {existing_path}")
+                else:
+                    # NEW FUZZY CHECK: If ID differs, does the name match any synced track?
+                    found_fuzzy = False
+                    clean_pt_name = self._clean_search_term(pt.name).lower()
+                    pt_artist = pt.artist.name.lower() if hasattr(pt, 'artist') and pt.artist else ""
+                    
+                    for s_path, s_dname, s_tid in synced_tracks_cache:
+                        if not s_dname or " - " not in s_dname: continue
+                        
+                        s_artist, s_title = s_dname.split(" - ", 1)
+                        clean_s_title = self._clean_search_term(s_title).lower()
+                        clean_s_artist = s_artist.lower()
+                        
+                        # Match logic: titles must be similar AND one artist name must be contained in the other
+                        if (clean_pt_name in clean_s_title or clean_s_title in clean_pt_name) and \
+                           (pt_artist in clean_s_artist or clean_s_artist in pt_artist):
+                            logging.info(f"Found name-match on Tidal: '{pt.name}' (ID: {tidal_id}) matches locally synced: '{s_dname}' (ID: {s_tid})")
+                            if handler.add_track_to_crate(s_path):
+                                logging.info(f"✅ Added existing file to crate by name match: {s_path}")
+                            found_fuzzy = True
+                            break
+                    
+                    if found_fuzzy:
+                        continue
+
+                    logging.info(f"Found new track on Tidal: {pt.name} - {pt.artist.name}")
+                    placeholder_path = f"TIDAL_IMPORT:{tidal_id}"
+                    
+                    display_name = f"{pt.artist.name} - {pt.name}"
+                    self.db.upsert_track(placeholder_path, tidal_id, display_name=display_name)
+                    self.db.update_track_status(placeholder_path, 'pending_download')
+                    
+                    # Register that it needs to be added to THIS crate
+                    self.db.add_pending_crate_addition(tidal_id, crate_path)
+                    new_from_tidal += 1
                 
         if new_from_tidal > 0:
             logging.info(f"Scheduled {new_from_tidal} new track(s) from Tidal for download.")
@@ -450,45 +488,71 @@ class SyncEngine:
                         print(f"DEBUG: Display Name: {display_name}")
                         
                         found_file = None
-                        # Try to find an existing file that matches
-                        potential_files = list(download_base_dir.rglob("*"))
                         
-                        for f in potential_files:
-                            if f.is_file() and f.suffix.lower() in allowed_exts and not f.name.startswith('.'):
-                                # Matching logic:
-                                # 1. Exact stem match with original
-                                if f.stem.lower() == original_path_obj.stem.lower():
-                                    found_file = f
-                                    break
+                        # STEP 1: Global DB Check - see if this Tidal ID is already synced anywhere
+                        if tidal_id:
+                            db_entry = self.db.get_track_by_tidal_id(tidal_id)
+                            if db_entry and db_entry['status'] == 'synced' and Path(db_entry['local_path']).exists():
+                                found_file = Path(db_entry['local_path'])
+                                print(f"✅ Track ya sincronizado en la base de datos: {found_file}")
+
+                        # STEP 2: Breadth-first file search (temp_dir then download_folder)
+                        if not found_file:
+                            search_dirs = [download_base_dir]
+                            config = self._load_config()
+                            download_folder = config.get("settings", {}).get("download_folder")
+                            if download_folder and Path(download_folder).exists() and Path(download_folder) != download_base_dir:
+                                search_dirs.append(Path(download_folder))
                                 
-                                # 2. Match por display_name (especialmente para TIDAL_IMPORT)
-                                if display_name:
-                                    clean_dname = self._clean_search_term(display_name).lower()
-                                    clean_fname = f.stem.lower()
-                                    
-                                    # Si el nombre del archivo contiene gran parte del display name o viceversa
-                                    if clean_dname in clean_fname or clean_fname in clean_dname:
-                                        found_file = f
-                                        break
-                                    
-                                    # Fuzzy check: artist and title parts
-                                    if " - " in display_name:
-                                        d_artist, d_title = display_name.lower().split(" - ", 1)
-                                        clean_d_artist = self._clean_search_term(d_artist)
-                                        clean_d_title = self._clean_search_term(d_title)
-                                        
-                                        if clean_d_title in clean_fname and (not clean_d_artist or clean_d_artist in clean_fname):
+                            for s_dir in search_dirs:
+                                if found_file: break
+                                logging.debug(f"Buscando en: {s_dir}")
+                                try:
+                                    potential_files = list(s_dir.rglob("*"))
+                                except Exception:
+                                    continue
+                                
+                                for f in potential_files:
+                                    if f.is_file() and f.suffix.lower() in allowed_exts and not f.name.startswith('.'):
+                                        # Matching logic:
+                                        # 1. Exact stem match with original
+                                        if f.stem.lower() == original_path_obj.stem.lower():
                                             found_file = f
                                             break
+                                        
+                                        # 2. Match por display_name (especialmente para TIDAL_IMPORT)
+                                        if display_name:
+                                            clean_dname = self._clean_search_term(display_name).lower()
+                                            clean_fname = f.stem.lower()
+                                            
+                                            # Si el nombre del archivo contiene gran parte del display name o viceversa
+                                            if clean_dname in clean_fname or clean_fname in clean_dname:
+                                                found_file = f
+                                                break
+                                            
+                                            # Fuzzy check: artist and title parts
+                                            if " - " in display_name:
+                                                d_artist, d_title = display_name.lower().split(" - ", 1)
+                                                clean_d_artist = self._clean_search_term(d_artist)
+                                                clean_d_title = self._clean_search_term(d_title)
+                                                
+                                                if clean_d_title in clean_fname and (not clean_d_artist or clean_d_artist in clean_fname):
+                                                    found_file = f
+                                                    break
 
-                                # 3. Match por Tidal ID en nombre
-                                if tidal_id in f.name:
-                                    found_file = f
-                                    break
+                                        # 3. Match por Tidal ID en nombre
+                                        if tidal_id in f.name:
+                                            found_file = f
+                                            break
                         
                         if found_file:
-                            print(f"ℹ️  Archivo encontrado en caché temporal: {found_file.name}")
-                            new_files = [str(found_file.relative_to(download_base_dir))]
+                            print(f"ℹ️  Archivo encontrado: {found_file.name}")
+                            # If it was found in a subfolder of download_base_dir, we keep the relative behavior
+                            if str(found_file).startswith(str(download_base_dir)):
+                                new_files = [str(found_file.relative_to(download_base_dir))]
+                            else:
+                                # It's a permanent file from elsewhere
+                                new_files = [str(found_file)]
                         else:
                             print(f"DEBUG: No se encontró match directo. Iniciando descarga...")
                             # 2. Snapshot files in the download base dir before download
@@ -506,6 +570,27 @@ class SyncEngine:
                                 if f.is_file() and f.suffix.lower() in allowed_exts and not f.name.startswith('.')
                             )
                             new_files = list(files_after - files_before)
+                            
+                            # FALLBACK: If tidal-dl-ng skipped the download (history), 
+                            # do a broader search to find where it is.
+                            if not new_files:
+                                logging.info("No se detectaron archivos nuevos. Probablemente saltado por historial. Buscando globalmente...")
+                                global_search_dirs = [download_base_dir]
+                                config = self._load_config()
+                                df = config.get("settings", {}).get("download_folder")
+                                if df and Path(df).exists() and Path(df) != download_base_dir:
+                                    global_search_dirs.append(Path(df))
+                                
+                                for g_dir in global_search_dirs:
+                                    if new_files: break
+                                    for gf in g_dir.rglob("*"):
+                                        if gf.is_file() and gf.suffix.lower() in allowed_exts and not gf.name.startswith('.'):
+                                            # Substring match by ID or Display Name
+                                            if (tidal_id and tidal_id in gf.name) or \
+                                               (display_name and self._clean_search_term(display_name).lower() in gf.name.lower()):
+                                                new_files = [str(gf.relative_to(download_base_dir) if str(gf).startswith(str(download_base_dir)) else gf)]
+                                                logging.info(f"✅ Archivo encontrado tras búsqueda global: {gf.name}")
+                                                break
                         
                         if new_files:
                             # Assuming one file downloaded per command
@@ -513,7 +598,27 @@ class SyncEngine:
                             is_upgrade = False
                             
                             if is_tidal_import:
-                                final_target_path = downloaded_file
+                                # Determine the permanent target path
+                                pending_crates = self.db.get_pending_crate_additions(tidal_id)
+                                if pending_crates:
+                                    # Use the first crate as the destination folder convention
+                                    first_crate_path = Path(pending_crates[0])
+                                    crate_name = first_crate_path.stem
+                                    
+                                    config = self._load_config()
+                                    download_folder = config.get("settings", {}).get("download_folder", str(Path.home() / "Music"))
+                                    
+                                    target_dir = Path(download_folder) / "Playlists" / crate_name
+                                    target_dir.mkdir(parents=True, exist_ok=True)
+                                    
+                                    final_target_path = target_dir / downloaded_file.name
+                                    
+                                    # Move the file to its permanent location
+                                    print(f"🚚 Moviendo importación a ubicación definitiva: {final_target_path}")
+                                    shutil.move(str(downloaded_file), str(final_target_path))
+                                else:
+                                    final_target_path = downloaded_file
+                                    
                                 markers = None
                             else:
                                 # Construct final target path
